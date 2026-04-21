@@ -158,7 +158,7 @@ for retries, and asyncio-driven fan-out of all 5 questions.
 - *Typed state.* `QuestionState` is a `TypedDict`; state flow is explicit and
   inspectable.
 - *Visualisable.* `graph.get_graph().draw_mermaid_png()` renders the topology
-  for the interview.
+  for demos and documentation.
 - *Conditional edges.* The retry loop is a first-class graph feature, not an
   ad-hoc while-loop.
 - *Interrupts and replays.* LangGraph supports checkpointing, which is a
@@ -291,7 +291,7 @@ Streamlit charting.
 
 **Why SQLite.**
 - Zero infrastructure. Ships with Python.
-- Queryable. The same store powers ad-hoc KPI queries during interviews.
+- Queryable. The same store powers ad-hoc KPI queries during demos and live presentations.
 - Persistent across restarts, unlike an in-memory metric registry.
 - Good fit for the take-home scope (dozens to hundreds of analyses).
 

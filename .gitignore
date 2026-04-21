@@ -1,7 +1,10 @@
 # === Secrets ===
 .env
 
-# === Assignment / sample files (not for public repo) ===
+# === AI tool config (not for repo) ===
+CLAUDE.md
+
+# === Sample files (not for public repo) ===
 *.pdf
 presentation/
 

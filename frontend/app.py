@@ -17,7 +17,9 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Add project root to path so backend imports resolve
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -50,10 +52,19 @@ API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
 # ─────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Contract Analyzer",
-    page_icon="📋",
+    page_title="Contract Analyzer | 247Labs",
+    page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebar"] { min-width: 320px; max-width: 320px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # ─────────────────────────────────────────────
@@ -61,17 +72,69 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 
 with st.sidebar:
-    st.title("Contract Analyzer")
-    st.caption("Senior Data Scientist Assessment | Manulife")
+    st.image(str(Path(__file__).parent / "logo.jpeg"), use_container_width=True)
+    st.markdown(
+        """
+        <div style="
+            font-size: 1.45rem;
+            font-weight: 900;
+            letter-spacing: 0.5px;
+            font-size: 1.7rem;
+            color: #a855f7;
+            text-shadow: 1px 1px 0px #6b21a8, 2px 2px 0px #581c87, 3px 3px 6px rgba(107,33,168,0.4);
+            margin: 6px 0 2px 0;
+            line-height: 1.2;
+        ">Agentic RAG Demo</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div style="
+            border-left: 3px solid #a855f7;
+            padding: 6px 0 6px 10px;
+            margin: 4px 0 0 0;
+        ">
+            <div style="font-size:0.65rem; color:#6b7280; letter-spacing:1.5px;
+                        text-transform:uppercase; margin-bottom:2px;">
+                Developed by
+            </div>
+            <div style="font-size:0.95rem; font-weight:700; color:#1e1b4b; line-height:1.2;">
+                Farshid Mokhtarinezhad
+            </div>
+            <div style="font-size:0.72rem; color:#a855f7; font-weight:500; margin-top:1px;">
+                Senior AI Engineer · 247Labs
+            </div>
+            <a href="mailto:farshid.mokhtarinezhad@247labs.com"
+               style="display:inline-block; margin-top:5px; font-size:0.68rem;
+                      color:#6b7280; text-decoration:none; letter-spacing:0.2px;">
+                ✉ farshid.mokhtarinezhad@247labs.com
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.divider()
 
     page = st.radio(
         "Navigate",
-        ["Analyze Contract", "KPI Dashboard", "Chat"],
+        ["Analyze Contract", "KPI Dashboard", "Chat", "Process Monitor"],
         index=0,
     )
 
     st.divider()
+    if st.session_state.get("job_running"):
+        fname = st.session_state.get("job_filename", "")
+        pct   = st.session_state.get("job_progress", {}).get("pct", 0)
+        st.markdown(
+            f"<div style='background:#1e3a1e;border-radius:6px;padding:8px 10px;margin-bottom:6px'>"
+            f"<span style='color:#4ade80;font-size:0.75rem'>⏳ Analyzing…</span><br>"
+            f"<span style='color:#e2e8f0;font-size:0.8rem'>{fname}</span><br>"
+            f"<span style='color:#9ca3af;font-size:0.72rem'>{pct}% complete</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
     if st.button("Refresh Data"):
         st.cache_data.clear()
         st.rerun()
@@ -136,6 +199,19 @@ def _call_api(method: str, endpoint: str, **kwargs):
 # PAGE 1: Analyze Contract
 # ─────────────────────────────────────────────
 
+_STEP_LABELS = {
+    "pending":     "⏳ Queued — waiting to start...",
+    "parsing_pdf": "📄 Step 1/5 — Parsing PDF (extracting text, tables, layout)...",
+    "chunking":    "✂️  Step 2/5 — Chunking into section-aware passages...",
+    "embedding":   "🔢 Step 3/5 — Embedding chunks with sentence-transformers...",
+    "indexing":    "🗄️  Step 4/5 — Indexing vectors into ChromaDB...",
+    "retrieving":  "🔍 Step 5/5 — Retrieving evidence per sub-criterion (hybrid search)...",
+    "analyzing":   "🤖 Step 5/5 — Compliance Agent analysing all 5 questions in parallel...",
+    "evaluating":  "🧐 Step 5/5 — Evaluator checking quotes and grading outputs...",
+    "completed":   "✅ Analysis complete!",
+}
+
+
 def page_analyze():
     st.header("Contract Compliance Analysis")
     st.caption(
@@ -143,117 +219,104 @@ def page_analyze():
         "requirements using an Agentic RAG pipeline."
     )
 
-    # ── Upload ────────────────────────────────────────────────────────────
+    job_running = st.session_state.get("job_running", False)
+
+    # ── If a job is in progress, show progress and poll once, then rerun ──
+    if job_running:
+        job_id   = st.session_state["last_job_id"]
+        filename = st.session_state.get("job_filename", "")
+        progress = st.session_state.get("job_progress", {"pct": 0, "label": "⏳ Queued...", "steps": []})
+
+        st.info(f"Analysis running: **{filename}**")
+        st.progress(progress["pct"] / 100, text=progress["label"])
+
+        steps_so_far = progress.get("steps", [])
+        if len(steps_so_far) > 1:
+            done = " → ".join(
+                _STEP_LABELS.get(s, s).split("—")[0].strip()
+                for s in steps_so_far[:-1]
+            )
+            st.caption(f"Done: {done}")
+
+        # Poll once and reschedule via rerun
+        poll = _call_api("get", f"/results/{job_id}")
+        if poll is None:
+            st.warning("Lost connection to API. Retrying...")
+            time.sleep(2)
+            st.rerun()
+            return
+
+        status = poll.get("status", "pending")
+        pct    = poll.get("progress_pct", 0)
+        label  = _STEP_LABELS.get(status, status)
+
+        steps = steps_so_far.copy()
+        if status not in steps and status != "completed":
+            steps.append(status)
+
+        st.session_state["job_progress"] = {"pct": pct, "label": label, "steps": steps}
+
+        if status == "completed":
+            st.session_state["last_result"]  = poll.get("result")
+            st.session_state["job_running"]  = False
+            st.session_state["job_progress"] = {}
+            st.rerun()
+            return
+        elif status == "failed":
+            st.error(f"Analysis failed: {poll.get('error', 'Unknown error')}")
+            st.session_state["job_running"] = False
+            st.session_state["job_progress"] = {}
+            return
+        else:
+            time.sleep(1)
+            st.rerun()
+            return
+
+    # ── Upload (only shown when no job is running) ────────────────────────
     uploaded = st.file_uploader(
         "Upload PDF Contract",
         type=["pdf"],
         help="Born-digital PDF recommended. Max 50 MB.",
     )
 
-    if uploaded is None:
-        st.info("Upload a PDF contract to begin analysis.")
-        return
+    if uploaded is not None:
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            st.metric("File", uploaded.name)
+            st.metric("Size", f"{uploaded.size / 1024:.1f} KB")
+        with col2:
+            analyze_btn = st.button("Analyze Contract", type="primary", use_container_width=True)
 
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        st.metric("File", uploaded.name)
-        st.metric("Size", f"{uploaded.size / 1024:.1f} KB")
-    with col2:
-        analyze_btn = st.button("Analyze Contract", type="primary", use_container_width=True)
-
-    if analyze_btn:
-        # ── Submit job ────────────────────────────────────────────────────
-        with st.spinner("Submitting analysis job..."):
-            response = _call_api(
-                "post",
-                "/analyze",
-                files={"file": (uploaded.name, uploaded.getvalue(), "application/pdf")},
-            )
-
-        if response is None:
-            return
-
-        job_id = response["job_id"]
-        trace_id = response["trace_id"]
-        contract_id = response.get("contract_id", "")
-
-        st.success(f"Job started — ID: `{job_id}`")
-        st.caption(f"Trace ID: `{trace_id}`")
-
-        # Store in session for chat and result persistence
-        st.session_state["contract_id"] = contract_id
-        st.session_state["last_job_id"] = job_id
-        st.session_state["last_trace_id"] = trace_id
-        st.session_state["last_result"] = None  # clear previous result
-
-        # ── Poll for results ──────────────────────────────────────────────
-        progress_bar = st.progress(0, text="⏳ Submitting job...")
-        status_area = st.empty()
-        steps_done = st.empty()
-
-        step_labels = {
-            "pending":     "⏳ Queued — waiting to start...",
-            "parsing_pdf": "📄 Step 1/5 — Parsing PDF (extracting text, tables, layout)...",
-            "chunking":    "✂️  Step 2/5 — Chunking into section-aware passages...",
-            "embedding":   "🔢 Step 3/5 — Embedding chunks with sentence-transformers...",
-            "indexing":    "🗄️  Step 4/5 — Indexing vectors into ChromaDB...",
-            "retrieving":  "🔍 Step 5/5 — Retrieving evidence per sub-criterion (hybrid search)...",
-            "analyzing":   "🤖 Step 5/5 — Compliance Agent analysing all 5 questions in parallel...",
-            "evaluating":  "🧐 Step 5/5 — Evaluator checking quotes and grading outputs...",
-            "completed":   "✅ Analysis complete!",
-        }
-
-        step_order = ["pending", "parsing_pdf", "chunking", "embedding",
-                      "indexing", "retrieving", "analyzing", "evaluating", "completed"]
-        completed_steps = []
-
-        for _ in range(720):  # 12-minute timeout at 1s intervals
-            time.sleep(1)
-            poll = _call_api("get", f"/results/{job_id}")
-            if poll is None:
-                break
-
-            status = poll.get("status", "pending")
-            pct = poll.get("progress_pct", 0)
-            label = step_labels.get(status, status)
-
-            # Track which steps we've seen so fast steps aren't lost
-            if status not in completed_steps and status != "completed":
-                completed_steps.append(status)
-
-            progress_bar.progress(pct / 100, text=label)
-
-            # Show breadcrumb of completed steps
-            if len(completed_steps) > 1:
-                done = " → ".join(
-                    step_labels.get(s, s).split("—")[0].strip()
-                    for s in completed_steps[:-1]
+        if analyze_btn:
+            with st.spinner("Submitting analysis job..."):
+                response = _call_api(
+                    "post",
+                    "/analyze",
+                    files={"file": (uploaded.name, uploaded.getvalue(), "application/pdf")},
                 )
-                steps_done.caption(f"Done: {done}")
 
-            if status == "completed":
-                st.session_state["last_result"] = poll.get("result")
-                progress_bar.progress(1.0, text="✅ Analysis complete!")
-                break
-            elif status == "failed":
-                st.error(f"Analysis failed: {poll.get('error', 'Unknown error')}")
-                return
+            if response is not None:
+                st.session_state["last_job_id"]   = response["job_id"]
+                st.session_state["last_trace_id"] = response["trace_id"]
+                st.session_state["contract_id"]   = response.get("contract_id", "")
+                st.session_state["last_result"]   = None
+                st.session_state["job_running"]   = True
+                st.session_state["job_filename"]  = uploaded.name
+                st.session_state["job_progress"]  = {"pct": 0, "label": "⏳ Queued...", "steps": []}
+                st.rerun()
 
-        if st.session_state.get("last_result") is None:
-            st.warning("Analysis timed out or result not available. Try polling manually.")
-            return
-
-    # ── Analysis history browser ──────────────────────────────────────────
+    # ── Analysis history browser (always visible) ─────────────────────────
     st.divider()
-    st.subheader("Previous Analyses")
+    st.subheader("Analysis History")
     history_df = get_analyses_df(limit=20)
     if history_df.empty:
         st.caption("No previous analyses yet.")
     else:
         for _, row in history_df.iterrows():
             ts = row.get("analysis_timestamp", "")[:16].replace("T", " ")
-            label = f"📄 {row['filename']}  —  {ts}  —  conf: {row.get('avg_confidence', 0):.0%}"
-            if st.button(label, key=f"hist_{row['trace_id']}"):
+            is_active = st.session_state.get("last_trace_id") == row["trace_id"]
+            label = f"{'▶ ' if is_active else '📄 '}{row['filename']}  —  {ts}  —  conf: {row.get('avg_confidence', 0):.0%}"
+            if st.button(label, key=f"hist_{row['trace_id']}", type="primary" if is_active else "secondary"):
                 raw = get_full_result(row["trace_id"])
                 if raw:
                     st.session_state["last_result"] = json.loads(raw)
@@ -261,9 +324,9 @@ def page_analyze():
                     st.session_state["contract_id"] = row.get("contract_id", "")
                     st.rerun()
                 else:
-                    st.warning("Full result not stored for this analysis (run before history was enabled).")
+                    st.warning("Full result not stored for this analysis.")
 
-    # ── Display results (persists across reruns) ──────────────────────────
+    # ── Display results (always visible when loaded) ──────────────────────
     result_data = st.session_state.get("last_result")
     trace_id = st.session_state.get("last_trace_id", "")
     if result_data:
@@ -529,7 +592,6 @@ def page_dashboard():
             hide_index=True,
         )
 
-    # ── KPI rationale expander (for interview) ────────────────────────────
     with st.expander("KPI Rationale & Thresholds"):
         st.markdown("""
 | KPI | Target / Threshold | Alert Action | Why It Matters |
@@ -631,6 +693,407 @@ def page_chat():
 
 
 # ─────────────────────────────────────────────
+# PAGE 4: Process Monitor
+# ─────────────────────────────────────────────
+
+_EST = ZoneInfo("America/New_York")
+
+
+def _to_est(ts: str) -> str:
+    """Convert an ISO UTC timestamp string to EST/EDT (America/New_York)."""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_EST).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ts[:19].replace("T", " ")
+
+
+# Stage → (label, css-color, emoji)  — mirrors tools/log_live.py STAGE_MAP
+_STAGE_MAP = {
+    "api_startup_complete":       ("STARTUP",    "#22d3ee", "🚀"),
+    "metrics_db_initialized":     ("STARTUP",    "#6b7280", "💾"),
+    "analysis_job_created":       ("JOB",        "#60a5fa", "📋"),
+    "analysis_pipeline_start":    ("PIPELINE",   "#60a5fa", "▶"),
+    "pdf_parse_start":            ("PARSE",      "#fbbf24", "📄"),
+    "pdf_parse_complete":         ("PARSE",      "#fbbf24", "📄"),
+    "chunking_complete":          ("CHUNK",      "#fbbf24", "✂"),
+    "embedding_model_loading":    ("EMBED",      "#e879f9", "🔢"),
+    "embedding_model_ready":      ("EMBED",      "#e879f9", "🔢"),
+    "embedding_complete":         ("EMBED",      "#e879f9", "🔢"),
+    "chromadb_client_ready":      ("INDEX",      "#e879f9", "🗄"),
+    "chunks_indexed":             ("INDEX",      "#e879f9", "🗄"),
+    "router_llm_call_start":      ("ROUTER",     "#22d3ee", "🔀"),
+    "router_llm_call_complete":   ("ROUTER",     "#22d3ee", "🔀"),
+    "router_query_plan":          ("ROUTER",     "#22d3ee", "🔀"),
+    "compliance_agent_llm_call":  ("COMPLIANCE", "#4ade80", "🤖"),
+    "compliance_agent_complete":  ("COMPLIANCE", "#4ade80", "🤖"),
+    "evaluator_complete":         ("EVALUATOR",  "#fbbf24", "🧐"),
+    "analysis_pipeline_complete": ("DONE",       "#4ade80", "✅"),
+    "analysis_job_failed":        ("ERROR",      "#f87171", "❌"),
+    "analysis_job_error":         ("ERROR",      "#f87171", "❌"),
+}
+
+_NOISY_LOGGERS = {
+    "matplotlib", "httpx", "huggingface_hub", "sentence_transformers",
+    "unstructured", "unstructured_inference", "pikepdf._core",
+}
+_NOISY_EVENTS = {"http_request_start", "http_request_end"}
+
+_VERDICT_COLOR = {
+    "PASS":            "#4ade80",
+    "PASS_WITH_FLAGS": "#fbbf24",
+    "FAIL":            "#f87171",
+}
+_STATE_COLOR = {
+    "Fully Compliant":      "#4ade80",
+    "Partially Compliant":  "#fbbf24",
+    "Non-Compliant":        "#f87171",
+    "Unable to Determine":  "#9ca3af",
+}
+
+
+def _fmt_extras_html(entry: dict) -> str:
+    skip = {"event", "logger", "level", "timestamp", "trace_id", "span_id", "request_id"}
+    priority = [
+        "question_id", "question_title", "duration_ms", "total_chunks",
+        "total_elements", "num_chunks", "confidence", "verdict",
+        "compliance_state", "retry_count", "hallucination_flags",
+        "error", "filename", "model", "total_input_tokens",
+        "total_output_tokens", "estimated_cost_usd",
+    ]
+    parts = []
+    shown: set[str] = set()
+    for key in priority:
+        if key in entry and key not in skip:
+            val = entry[key]
+            if key == "duration_ms":
+                val = f"{val/1000:.2f}s"
+            elif key == "estimated_cost_usd":
+                val = f"${val:.4f}"
+            elif key == "confidence":
+                val = f"{val:.0%}"
+            parts.append(
+                f"<span style='color:#6b7280'>{key}</span>"
+                f"<span style='color:#e2e8f0'>=</span>"
+                f"<span style='color:#22d3ee'>{val}</span>"
+            )
+            shown.add(key)
+    for key, val in entry.items():
+        if key not in skip and key not in shown and not isinstance(val, (dict, list)):
+            parts.append(
+                f"<span style='color:#6b7280'>{key}={val}</span>"
+            )
+    return "&nbsp;&nbsp;".join(parts)
+
+
+def _render_entry_html(entry: dict, trace_filter: str | None, verbose: bool) -> str | None:
+    logger_name = entry.get("logger", "")
+    event       = entry.get("event", "")
+    level       = entry.get("level", "info").lower()
+    ts          = _to_est(entry.get("timestamp", ""))
+    trace_id    = entry.get("trace_id", "")
+    short_tid   = trace_id[:8] if trace_id else "--------"
+
+    if trace_filter and trace_id and not trace_id.startswith(trace_filter):
+        return None
+    if not verbose:
+        if any(logger_name.startswith(n) for n in _NOISY_LOGGERS):
+            return None
+        if event in _NOISY_EVENTS:
+            return None
+
+    stage, color, emoji = _STAGE_MAP.get(event, ("SYS", "#6b7280", "·"))
+
+    if level in ("error", "critical"):
+        color = "#f87171"
+    elif level == "warning":
+        color = "#fbbf24"
+
+    extras = _fmt_extras_html(entry)
+    return (
+        f"<div style='margin:1px 0; line-height:1.6'>"
+        f"<span style='color:#4b5563'>{ts}</span>&nbsp;"
+        f"<span style='color:#374151'>[{short_tid}]</span>&nbsp;"
+        f"<span style='color:{color};font-weight:600;min-width:90px;display:inline-block'>{stage}</span>&nbsp;"
+        f"<span style='color:{color}'>{emoji}&nbsp;{event}</span>&nbsp;&nbsp;"
+        f"{extras}"
+        f"</div>"
+    )
+
+
+def _read_log_entries(log_path: Path, last_n: int = 300) -> list[dict]:
+    entries = []
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        for line in lines[-last_n:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    except OSError:
+        pass
+    return entries
+
+
+def _list_recent_traces(entries: list[dict]) -> list[dict]:
+    traces: dict[str, dict] = {}
+    for e in entries:
+        tid = e.get("trace_id")
+        if not tid:
+            continue
+        if tid not in traces:
+            traces[tid] = {"trace_id": tid, "started": e.get("timestamp", ""), "filename": "", "events": 0}
+        traces[tid]["events"] += 1
+        if e.get("filename"):
+            traces[tid]["filename"] = e["filename"]
+    return sorted(traces.values(), key=lambda x: x["started"], reverse=True)
+
+
+def _render_trace_html(entries: list[dict]) -> str:
+    lines = []
+    stage_for_event: dict[str, str] = {}
+    _TRACE_STAGES = [
+        ("📋  JOB CREATED",      ["analysis_job_created"]),
+        ("📄  PDF PARSING",       ["pdf_parse_start", "pdf_parse_complete"]),
+        ("✂   CHUNKING",          ["chunking_complete"]),
+        ("🔢  EMBEDDING",         ["embedding_model_loading", "embedding_model_ready", "embedding_complete"]),
+        ("🗄   INDEXING",          ["chromadb_client_ready", "chunks_indexed"]),
+        ("🔀  ROUTER AGENT",      ["router_llm_call_start", "router_llm_call_complete", "router_query_plan"]),
+        ("🤖  COMPLIANCE AGENT",  ["compliance_agent_llm_call", "compliance_agent_complete", "compliance_agent_start"]),
+        ("🧐  EVALUATOR",         ["evaluator_complete", "evaluator_start", "evaluator_llm_call"]),
+        ("✅  PIPELINE COMPLETE", ["analysis_pipeline_complete"]),
+        ("❌  ERRORS",            ["analysis_job_failed", "analysis_job_error"]),
+    ]
+    for stage_label, stage_events in _TRACE_STAGES:
+        for ev in stage_events:
+            stage_for_event[ev] = stage_label
+
+    current_stage = None
+    for entry in entries:
+        ev    = entry.get("event", "")
+        ts    = _to_est(entry.get("timestamp", ""))
+        level = entry.get("level", "info").lower()
+
+        stage = stage_for_event.get(ev)
+        if stage and stage != current_stage:
+            current_stage = stage
+            lines.append(
+                f"<div style='margin:10px 0 4px 0; color:#60a5fa; font-weight:700; "
+                f"border-bottom:1px solid #1e3a5f; padding-bottom:2px'>── {stage}</div>"
+            )
+
+        _, color, emoji = _STAGE_MAP.get(ev, ("SYS", "#6b7280", "·"))
+        if level in ("error", "critical"):
+            color = "#f87171"
+        elif level == "warning":
+            color = "#fbbf24"
+
+        extras = _fmt_extras_html(entry)
+
+        # Special rich rendering for key events
+        detail = ""
+        if ev == "analysis_pipeline_complete":
+            dur  = entry.get("total_duration_ms", 0) / 1000
+            cost = entry.get("estimated_cost_usd", 0)
+            tin  = entry.get("total_input_tokens", 0)
+            tout = entry.get("total_output_tokens", 0)
+            detail = (
+                f"<div style='margin-left:16px;color:#9ca3af;font-size:0.85em'>"
+                f"duration: <b style='color:#e2e8f0'>{dur:.1f}s</b> &nbsp;"
+                f"cost: <b style='color:#e2e8f0'>${cost:.4f}</b> &nbsp;"
+                f"tokens: <b style='color:#e2e8f0'>{tin:,} in / {tout:,} out</b>"
+                f"</div>"
+            )
+        elif ev == "evaluator_complete":
+            verdict   = entry.get("verdict", "")
+            conf_adj  = entry.get("confidence_adjustment")
+            hall_raw  = entry.get("hallucination_flags", [])
+            hall_n    = hall_raw if isinstance(hall_raw, int) else len(hall_raw)
+            vcol      = _VERDICT_COLOR.get(verdict, "#e2e8f0")
+            detail_parts = [f"verdict: <b style='color:{vcol}'>{verdict}</b>"]
+            if conf_adj is not None:
+                detail_parts.append(f"conf_adj: <b style='color:#e2e8f0'>{conf_adj:+.0%}</b>")
+            if hall_n:
+                detail_parts.append(f"<span style='color:#f87171'>hallucination_flags: {hall_n}</span>")
+            detail = f"<div style='margin-left:16px;color:#9ca3af;font-size:0.85em'>{'  '.join(detail_parts)}</div>"
+        elif ev == "compliance_agent_complete":
+            state = entry.get("compliance_state", "")
+            conf  = entry.get("confidence", 0)
+            scol  = _STATE_COLOR.get(state, "#e2e8f0")
+            detail = (
+                f"<div style='margin-left:16px;color:#9ca3af;font-size:0.85em'>"
+                f"state: <b style='color:{scol}'>{state}</b> &nbsp;"
+                f"confidence: <b style='color:#e2e8f0'>{conf:.0%}</b>"
+                f"</div>"
+            )
+
+        lines.append(
+            f"<div style='margin:1px 0;line-height:1.7'>"
+            f"<span style='color:#4b5563'>{ts}</span>&nbsp;"
+            f"<span style='color:{color}'>{emoji}&nbsp;<b>{ev}</b></span>&nbsp;&nbsp;"
+            f"{extras}"
+            f"</div>"
+            f"{detail}"
+        )
+
+    # Compliance summary table
+    comp_events = [e for e in entries if e.get("event") == "evaluator_complete"]
+    if comp_events:
+        lines.append(
+            "<div style='margin:16px 0 4px 0;color:#60a5fa;font-weight:700;"
+            "border-bottom:1px solid #1e3a5f;padding-bottom:2px'>── COMPLIANCE SUMMARY</div>"
+        )
+        lines.append(
+            "<table style='width:100%;border-collapse:collapse;font-size:0.82em;margin-top:6px'>"
+            "<tr style='color:#6b7280'><th style='text-align:left;padding:2px 8px'>Q</th>"
+            "<th style='text-align:left;padding:2px 8px'>Question</th>"
+            "<th style='text-align:left;padding:2px 8px'>Verdict</th>"
+            "<th style='text-align:left;padding:2px 8px'>Conf Adj</th>"
+            "<th style='text-align:left;padding:2px 8px'>Retries</th></tr>"
+        )
+        for e in sorted(comp_events, key=lambda x: x.get("question_id", 0)):
+            qid     = e.get("question_id", "?")
+            title   = (e.get("question_title") or "")[:45]
+            verdict = e.get("verdict", "")
+            cadj    = e.get("confidence_adjustment", 0) or 0
+            retries = e.get("retry_count", 0)
+            vcol    = _VERDICT_COLOR.get(verdict, "#e2e8f0")
+            rcol    = "#f87171" if retries else "#e2e8f0"
+            cadj_s  = f"{cadj:+.0%}" if cadj else "—"
+            lines.append(
+                f"<tr style='border-top:1px solid #1e293b'>"
+                f"<td style='padding:3px 8px;color:#9ca3af'>Q{qid}</td>"
+                f"<td style='padding:3px 8px;color:#e2e8f0'>{title}</td>"
+                f"<td style='padding:3px 8px;color:{vcol};font-weight:700'>{verdict}</td>"
+                f"<td style='padding:3px 8px;color:#9ca3af'>{cadj_s}</td>"
+                f"<td style='padding:3px 8px;color:{rcol}'>{retries}</td>"
+                f"</tr>"
+            )
+        lines.append("</table>")
+
+    return "\n".join(lines)
+
+
+def _terminal_wrap(content_html: str, height: int = 520) -> str:
+    return (
+        f"<div style='"
+        f"background:#0d1117;padding:16px;border-radius:8px;"
+        f"font-family:\"Fira Code\",\"Cascadia Code\",monospace;font-size:0.76rem;"
+        f"height:{height}px;overflow-y:auto;border:1px solid #21262d;"
+        f"color:#e2e8f0;line-height:1.5'>"
+        f"{content_html}"
+        f"</div>"
+    )
+
+
+def page_monitor():
+    st.header("Process Monitor")
+    st.caption("Live pipeline logs and per-trace inspection.")
+
+    log_path = Path(os.getenv("LOG_FILE_PATH", "logs/app.jsonl"))
+
+    tab1, tab2 = st.tabs(["Live Feed", "Trace Inspector"])
+
+    # ── Tab 1: Live Feed ──────────────────────────────────────────────────
+    with tab1:
+        current_trace = st.session_state.get("last_trace_id", "")
+
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            auto_refresh = st.toggle("Auto-refresh", value=False)
+        with col2:
+            interval = st.selectbox("Every", [2, 5, 10, 30], index=1, format_func=lambda x: f"{x}s")
+        with col3:
+            verbose = st.toggle("Verbose", value=False)
+
+        if not current_trace:
+            st.info("No active analysis in this session. Go to **Analyze Contract**, upload a PDF, and the live logs will appear here.")
+        elif not log_path.exists():
+            st.warning(f"Log file not found at `{log_path}`. Start the API server first.")
+        else:
+            entries = _read_log_entries(log_path, last_n=5000)
+            # Show only entries for the current session's trace
+            trace_entries = [e for e in entries if e.get("trace_id", "").startswith(current_trace)]
+            rendered = [_render_entry_html(e, current_trace, verbose) for e in trace_entries]
+            rendered = [r for r in rendered if r]
+
+            short_tid = current_trace[:12]
+            st.caption(f"Trace: `{short_tid}...`  —  {len(rendered)} events  (EST)")
+
+            if not rendered:
+                content = "<span style='color:#4b5563'>Waiting for log events for this trace…</span>"
+            else:
+                content = "\n".join(rendered)
+
+            st.markdown(_terminal_wrap(content), unsafe_allow_html=True)
+
+        if auto_refresh and current_trace:
+            time.sleep(interval)
+            st.rerun()
+
+    # ── Tab 2: Trace Inspector ────────────────────────────────────────────
+    with tab2:
+        if not log_path.exists():
+            st.warning(f"Log file not found at `{log_path}`.")
+        else:
+            all_entries = _read_log_entries(log_path, last_n=5000)
+            recent_traces = _list_recent_traces(all_entries)
+
+            if not recent_traces:
+                st.info("No traces found yet. Run an analysis first.")
+            else:
+                st.markdown("**Recent traces** — click one to inspect:")
+
+                selected_trace = st.session_state.get("monitor_selected_trace")
+
+                cols = st.columns([3, 2, 1, 1])
+                cols[0].markdown("<span style='color:gray;font-size:0.8em'>Trace ID</span>", unsafe_allow_html=True)
+                cols[1].markdown("<span style='color:gray;font-size:0.8em'>File</span>", unsafe_allow_html=True)
+                cols[2].markdown("<span style='color:gray;font-size:0.8em'>Started</span>", unsafe_allow_html=True)
+                cols[3].markdown("<span style='color:gray;font-size:0.8em'>Events</span>", unsafe_allow_html=True)
+
+                for trace in recent_traces[:15]:
+                    tid   = trace["trace_id"]
+                    ts    = _to_est(trace["started"])[:16]
+                    fn    = (trace["filename"] or "(unknown)")[:30]
+                    n_ev  = trace["events"]
+                    is_sel = selected_trace == tid
+
+                    c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+                    with c1:
+                        btn_label = f"{'▶ ' if is_sel else ''}{tid[:20]}..."
+                        if st.button(btn_label, key=f"trace_{tid}",
+                                     type="primary" if is_sel else "secondary",
+                                     use_container_width=True):
+                            st.session_state["monitor_selected_trace"] = tid
+                            st.rerun()
+                    c2.markdown(f"<span style='font-size:0.85em'>{fn}</span>", unsafe_allow_html=True)
+                    c3.markdown(f"<span style='font-size:0.85em;color:gray'>{ts}</span>", unsafe_allow_html=True)
+                    c4.markdown(f"<span style='font-size:0.85em;color:gray'>{n_ev}</span>", unsafe_allow_html=True)
+
+                if selected_trace:
+                    trace_entries = [e for e in all_entries if e.get("trace_id", "").startswith(selected_trace)]
+                    trace_entries = sorted(trace_entries, key=lambda e: e.get("timestamp", ""))
+
+                    st.divider()
+                    st.markdown(f"**Trace:** `{selected_trace}`  — {len(trace_entries)} events")
+
+                    if trace_entries:
+                        content = _render_trace_html(trace_entries)
+                        st.markdown(_terminal_wrap(content, height=600), unsafe_allow_html=True)
+                    else:
+                        st.warning("No events found for this trace.")
+
+
+# ─────────────────────────────────────────────
 # Router
 # ─────────────────────────────────────────────
 
@@ -640,3 +1103,5 @@ elif page == "KPI Dashboard":
     page_dashboard()
 elif page == "Chat":
     page_chat()
+elif page == "Process Monitor":
+    page_monitor()

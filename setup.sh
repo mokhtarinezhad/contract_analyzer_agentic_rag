@@ -55,13 +55,18 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 fi
 
 # ── Create required directories ────────────────────────────────────────────────
-mkdir -p data logs data/chroma_db
+mkdir -p data logs data/chroma_db data/models
 
-# ── Download sentence-transformers model ──────────────────────────────────────
-echo "==> Pre-downloading embedding model (all-MiniLM-L6-v2)..."
-$PYTHON -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
-    && echo "  Embedding model ready" \
-    || echo "  WARNING: Model download failed. Will retry on first run."
+# ── Download sentence-transformers model (once, into ./data/models) ───────────
+echo "==> Pre-downloading embedding model (all-MiniLM-L6-v2) into ./data/models ..."
+$PYTHON -c "
+from sentence_transformers import SentenceTransformer
+import os, pathlib
+cache = str(pathlib.Path('./data/models').resolve())
+SentenceTransformer('all-MiniLM-L6-v2', cache_folder=cache)
+print('  Embedding model cached at:', cache)
+" && echo "  Embedding model ready" \
+  || echo "  WARNING: Model download failed. Will retry on first run."
 
 # ── Verify Anthropic API key ──────────────────────────────────────────────────
 if grep -q "sk-ant-..." .env 2>/dev/null; then

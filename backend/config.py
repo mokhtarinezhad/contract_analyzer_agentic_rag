@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     # ── Embeddings ────────────────────────────────────────────────────────
     embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_model_cache_dir: str = "./data/models"
 
     # ── Vector Store ──────────────────────────────────────────────────────
     chroma_persist_dir: str = "./data/chroma_db"

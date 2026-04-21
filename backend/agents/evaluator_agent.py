@@ -6,7 +6,7 @@ Three-layer evaluation strategy:
   Layer 1 (Deterministic): Fuzzy-match every quote against source chunks.
            Flags quotes not found in the actual retrieved text.
 
-  Layer 2 (LLM Critic): Sends the full compliance result back to Claude
+  Layer 2 (LLM Critic): Sends the full compliance result back to the LLM
            with a critic prompt. Checks completeness, consistency,
            confidence calibration, and logical coherence.
 
@@ -239,7 +239,7 @@ def _run_llm_critic(
     sub_criteria_descriptions: List[str],
     trace_id: str,
 ) -> tuple[EvaluatorAssessment, int, int]:
-    """Call Claude via LangChain to critically review the compliance determination."""
+    """Call the LLM via LangChain to critically review the compliance determination."""
     llm = ChatAnthropic(model=settings.llm_model, max_tokens=512, api_key=settings.anthropic_api_key)
 
     # Format the original context

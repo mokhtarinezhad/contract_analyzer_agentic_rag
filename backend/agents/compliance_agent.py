@@ -57,7 +57,7 @@ Confidence calibration:
 You must call the submit_compliance_result tool with your analysis. Do not return plain text.
 """
 
-# Tool schema — Claude is forced to call this, guaranteeing valid structured output
+# Tool schema — the LLM is forced to call this, guaranteeing valid structured output
 _COMPLIANCE_TOOL = {
     "name": "submit_compliance_result",
     "description": "Submit the structured compliance analysis result.",
@@ -149,7 +149,7 @@ def run_compliance_agent(
         f"## Retrieved Contract Excerpts\n\n{context_text}"
     )
 
-    # Build multi-turn conversation on retry so Claude sees its previous answer
+    # Build multi-turn conversation on retry so the LLM sees its previous answer
     if evaluator_feedback and previous_result:
         messages = [
             SystemMessage(content=_COMPLIANCE_SYSTEM_PROMPT),

@@ -3,7 +3,7 @@
 Trace inspector for Contract Analyzer.
 
 Replays a full analysis trace chronologically with clean, narrated output.
-Perfect for walking the interview panel through exactly what the system did.
+Perfect for walking through exactly what the system did during a demo or presentation.
 
 Usage:
     python tools/log_trace.py                        # list recent traces

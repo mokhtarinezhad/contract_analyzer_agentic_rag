@@ -7,7 +7,7 @@ Responsibilities:
   3. Execute hybrid retrieval for all sub-criteria.
   4. Return a RouterDecision with retrieved chunks ready for the Compliance Agent.
 
-Uses Claude to generate the sub-criterion query plan, then calls the
+Uses the LLM to generate the sub-criterion query plan, then calls the
 retriever for actual chunk fetching.
 """
 

@@ -8,6 +8,7 @@ and cosine similarity utilities used by the retriever.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import List
 
 import numpy as np
@@ -23,10 +24,11 @@ _model = None  # lazy-loaded singleton
 def _get_model():
     global _model
     if _model is None:
-        logger.info("embedding_model_loading", model=settings.embedding_model)
+        cache_dir = str(Path(settings.embedding_model_cache_dir).resolve())
+        logger.info("embedding_model_loading", model=settings.embedding_model, cache_dir=cache_dir)
         from sentence_transformers import SentenceTransformer  # type: ignore
-        _model = SentenceTransformer(settings.embedding_model)
-        logger.info("embedding_model_ready", model=settings.embedding_model)
+        _model = SentenceTransformer(settings.embedding_model, cache_folder=cache_dir)
+        logger.info("embedding_model_ready", model=settings.embedding_model, cache_dir=cache_dir)
     return _model
 
 

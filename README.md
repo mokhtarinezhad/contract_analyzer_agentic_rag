@@ -1,6 +1,14 @@
-# Contract Analyzer
+# Contract Analyzer · 247Labs
 
-Production-grade contract compliance analysis using Agentic RAG.
+> **Proprietary Software** — © 2025 [247Labs Inc.](https://247labs.com)
+> Developed by **Farshid Mokhtarinezhad**, Senior AI Engineer.
+> Commercial use is permitted solely by 247Labs Inc. and its authorised representatives.
+> See [NOTICE.md](./NOTICE.md) for full terms.
+
+A production-grade contract compliance analysis demo built for **247Labs Inc.**,
+demonstrating an end-to-end Agentic RAG pipeline — extract, retrieve, analyse, and
+verify compliance against security requirements with grounded, hallucination-checked
+structured output.
 
 ## Quick Start
 
@@ -95,7 +103,7 @@ FastAPI /analyze
 | Frontend | Streamlit | Python-native, production-appropriate for internal tools |
 | Logging | structlog (JSON) | Structured, trace/span IDs, parseable |
 | Metrics | SQLite | Zero-infra, directly queryable by Streamlit |
-| MCP Server | mcp SDK | Exposes analysis as Claude/Cursor tool |
+| MCP Server | mcp SDK | Exposes analysis as an MCP tool (compatible with any MCP client) |
 
 ## Project Structure
 
