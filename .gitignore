@@ -1,0 +1,45 @@
+# === Secrets ===
+.env
+
+# === Assignment / sample files (not for public repo) ===
+*.pdf
+presentation/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# === Virtual environment ===
+.venv/
+venv/
+env/
+
+# === Data & generated output ===
+data/
+logs/
+
+# === macOS ===
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# === IDEs ===
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# === Testing ===
+.pytest_cache/
+.coverage
+htmlcov/
+.claude/
+chroma_db/
