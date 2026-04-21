@@ -1370,7 +1370,9 @@ def page_guide():
 # Router
 # ─────────────────────────────────────────────
 
-if page == "Analyze Contract":
+if page == "Guide":
+    page_guide()
+elif page == "Analyze Contract":
     page_analyze()
 elif page == "KPI Dashboard":
     page_dashboard()

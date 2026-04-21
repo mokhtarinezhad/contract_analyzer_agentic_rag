@@ -35,7 +35,7 @@ if [ ! -f ".env" ]; then
     echo "==> Creating .env from .env.example..."
     cp .env.example .env
     echo ""
-    echo "  IMPORTANT: Edit .env and add your ANTHROPIC_API_KEY before running."
+    echo "  IMPORTANT: Edit .env and add your ANTHROPIC_API_KEY and/or OPENAI_API_KEY before running."
     echo ""
 fi
 
@@ -68,11 +68,29 @@ print('  Embedding model cached at:', cache)
 " && echo "  Embedding model ready" \
   || echo "  WARNING: Model download failed. Will retry on first run."
 
-# ── Verify Anthropic API key ──────────────────────────────────────────────────
-if grep -q "sk-ant-..." .env 2>/dev/null; then
+# ── Verify API keys ───────────────────────────────────────────────────────────
+ANTHROPIC_MISSING=false
+OPENAI_MISSING=false
+
+if grep -qE "^ANTHROPIC_API_KEY=sk-ant-\.\.\.$|^ANTHROPIC_API_KEY=$" .env 2>/dev/null; then
+    ANTHROPIC_MISSING=true
+fi
+if grep -qE "^OPENAI_API_KEY=sk-\.\.\.$|^OPENAI_API_KEY=$" .env 2>/dev/null; then
+    OPENAI_MISSING=true
+fi
+
+if $ANTHROPIC_MISSING && $OPENAI_MISSING; then
     echo ""
-    echo "  WARNING: ANTHROPIC_API_KEY is still the placeholder value."
-    echo "  Edit .env and set your real key."
+    echo "  WARNING: No API keys set. At least one is required."
+    echo "  Edit .env and add ANTHROPIC_API_KEY and/or OPENAI_API_KEY."
+elif $ANTHROPIC_MISSING; then
+    echo ""
+    echo "  NOTE: ANTHROPIC_API_KEY is not set — Anthropic models will be unavailable."
+    echo "  Add it to .env to enable Claude models."
+elif $OPENAI_MISSING; then
+    echo ""
+    echo "  NOTE: OPENAI_API_KEY is not set — OpenAI models will be unavailable."
+    echo "  Add it to .env to enable GPT models (optional)."
 fi
 
 echo ""
@@ -80,7 +98,10 @@ echo "==> Setup complete!"
 echo ""
 echo "To start the application:"
 echo ""
-echo "  1. Edit .env and set ANTHROPIC_API_KEY=sk-ant-..."
+echo "  1. Edit .env and set your API key(s):"
+echo "        ANTHROPIC_API_KEY=sk-ant-...   (for Claude models)"
+echo "        OPENAI_API_KEY=sk-...          (for GPT models — optional)"
+echo "     At least one key is required. Add both to use the full model selector."
 echo ""
 echo "  2. Start the API server (terminal 1):"
 echo "     source .venv/bin/activate"
