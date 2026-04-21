@@ -17,11 +17,11 @@ import json
 import time
 from typing import Any, Dict, List
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.compliance.questions import ComplianceQuestion
 from backend.config import settings
+from backend.llm_factory import get_llm
 from backend.observability.logger import get_logger
 from backend.rag.retriever import retrieve_for_question
 
@@ -50,6 +50,7 @@ def run_router_agent(
     contract_id: str,
     trace_id: str,
     top_k_per_criterion: int = 3,
+    model: str | None = None,
 ) -> Dict[str, Any]:
     """
     Plan and execute retrieval for one compliance question.
@@ -65,7 +66,8 @@ def run_router_agent(
         }
     """
     t0 = time.perf_counter()
-    llm = ChatAnthropic(model=settings.llm_model, max_tokens=1024, api_key=settings.anthropic_api_key)
+    active_model = model or settings.llm_model
+    llm = get_llm(active_model, max_tokens=1024)
 
     sub_criteria_text = "\n".join(
         f"  - [{sc.id}] {sc.description} (keywords: {', '.join(sc.keywords[:4])})"
@@ -85,7 +87,7 @@ def run_router_agent(
         trace_id=trace_id,
         question_id=question.id,
         question_title=question.title,
-        model=settings.llm_model,
+        model=active_model,
     )
 
     llm_t0 = time.perf_counter()

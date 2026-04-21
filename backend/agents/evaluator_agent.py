@@ -23,7 +23,6 @@ import time
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.compliance.schemas import (
@@ -33,6 +32,7 @@ from backend.compliance.schemas import (
     EvaluatorVerdict,
 )
 from backend.config import settings
+from backend.llm_factory import get_llm
 from backend.observability.logger import get_logger
 
 logger = get_logger(__name__)
@@ -70,6 +70,7 @@ def run_evaluator_agent(
     question_full_text: str,
     sub_criteria_descriptions: List[str],
     trace_id: str,
+    model: str | None = None,
 ) -> Dict[str, Any]:
     """
     Evaluate the Compliance Agent's output.
@@ -111,6 +112,7 @@ def run_evaluator_agent(
         question_full_text=question_full_text,
         sub_criteria_descriptions=sub_criteria_descriptions,
         trace_id=trace_id,
+        model=model,
     )
 
     # Merge hallucination flags into the LLM assessment
@@ -238,9 +240,10 @@ def _run_llm_critic(
     question_full_text: str,
     sub_criteria_descriptions: List[str],
     trace_id: str,
+    model: str | None = None,
 ) -> tuple[EvaluatorAssessment, int, int]:
     """Call the LLM via LangChain to critically review the compliance determination."""
-    llm = ChatAnthropic(model=settings.llm_model, max_tokens=512, api_key=settings.anthropic_api_key)
+    llm = get_llm(model, max_tokens=512)
 
     # Format the original context
     context_parts = []

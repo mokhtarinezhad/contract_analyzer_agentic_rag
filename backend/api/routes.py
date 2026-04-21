@@ -18,10 +18,11 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from backend.agents.orchestrator import analyse_contract
+from backend.llm_factory import ALL_MODELS, DEFAULT_MODEL, get_llm
 from backend.compliance.schemas import (
     ChatRequest,
     ChatResponse,
@@ -60,9 +61,12 @@ router = APIRouter()
 async def analyze_contract_endpoint(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="PDF contract file"),
+    model: str = Form(DEFAULT_MODEL, description="LLM model to use for analysis"),
 ):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    if model not in ALL_MODELS:
+        model = DEFAULT_MODEL
 
     job_id = str(uuid.uuid4())
     trace_id = new_trace_id()
@@ -100,6 +104,7 @@ async def analyze_contract_endpoint(
         filename=file.filename,
         contract_id=contract_id,
         trace_id=trace_id,
+        model=model,
     )
 
     return {
@@ -117,6 +122,7 @@ async def _run_analysis_background(
     filename: str,
     contract_id: str,
     trace_id: str,
+    model: str = DEFAULT_MODEL,
 ) -> None:
     """Background task that runs the full analysis pipeline."""
     _valid_statuses = {s.value for s in JobStatus}
@@ -139,6 +145,7 @@ async def _run_analysis_background(
             contract_id=contract_id,
             trace_id=trace_id,
             job_update_callback=_update_job,
+            model=model,
         )
 
         update_job(
@@ -262,7 +269,6 @@ async def chat_with_contract(request: ChatRequest):
     Allow free-form questions about the uploaded contract content.
     Uses the same vector store indexed during analysis.
     """
-    from langchain_anthropic import ChatAnthropic
     from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
     from backend.config import settings
     from backend.ingestion.embedder import embed_query
@@ -309,7 +315,7 @@ async def chat_with_contract(request: ChatRequest):
         f"Contract excerpts:\n{context}"
     )))
 
-    llm = ChatAnthropic(model=settings.llm_model, max_tokens=1024, api_key=settings.anthropic_api_key)
+    llm = get_llm(settings.llm_model, max_tokens=1024)
     response = llm.invoke(lc_messages)
     reply = response.content
 

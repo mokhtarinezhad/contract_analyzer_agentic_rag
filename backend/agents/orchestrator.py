@@ -52,9 +52,14 @@ _MAX_RETRIES = settings.max_retry_count
 # Per-model token pricing (USD per token). Keep in sync with the LLM provider's
 # published pricing when models are added or prices change.
 _MODEL_COSTS: Dict[str, tuple[float, float]] = {
-    "claude-opus-4-7":           (15e-6, 75e-6),  # $15 / $75 per 1M
-    "claude-sonnet-4-6":         (3e-6,  15e-6),  # $3  / $15 per 1M
-    "claude-haiku-4-5-20251001": (1e-6,  5e-6),   # $1  / $5  per 1M
+    # Anthropic
+    "claude-opus-4-7":           (15e-6, 75e-6),   # $15 / $75 per 1M
+    "claude-sonnet-4-6":         (3e-6,  15e-6),   # $3  / $15 per 1M
+    "claude-haiku-4-5-20251001": (1e-6,  5e-6),    # $1  / $5  per 1M
+    # OpenAI
+    "gpt-4o":                    (2.5e-6, 10e-6),  # $2.5 / $10 per 1M
+    "gpt-4o-mini":               (0.15e-6, 0.6e-6),# $0.15 / $0.60 per 1M
+    "gpt-4-turbo":               (10e-6,  30e-6),  # $10 / $30 per 1M
 }
 _DEFAULT_COSTS = (3e-6, 15e-6)  # fallback when an unknown model is configured
 
@@ -71,6 +76,7 @@ class QuestionState(TypedDict):
     question: ComplianceQuestion
     contract_id: str
     trace_id: str
+    model: str
     # Router output
     retrieved_chunks: List[dict]
     sub_criterion_queries: List[dict]
@@ -98,6 +104,7 @@ def _router_node(state: QuestionState) -> QuestionState:
         question=state["question"],
         contract_id=state["contract_id"],
         trace_id=state["trace_id"],
+        model=state.get("model"),
     )
     state["retrieved_chunks"] = result["retrieved_chunks"]
     state["sub_criterion_queries"] = result["sub_criterion_queries"]
@@ -123,6 +130,7 @@ def _compliance_node(state: QuestionState) -> QuestionState:
         evaluator_feedback=state.get("retry_feedback") if is_retry else None,
         previous_result=state.get("compliance_result") if is_retry else None,
         retry_count=state["retry_count"],
+        model=state.get("model"),
     )
     cr: ComplianceResult = result["compliance_result"]
     cr = cr.model_copy(update={"retry_count": state["retry_count"]})
@@ -148,6 +156,7 @@ def _evaluator_node(state: QuestionState) -> QuestionState:
         question_full_text=state["question"].full_text,
         sub_criteria_descriptions=[sc.description for sc in state["question"].sub_criteria],
         trace_id=state["trace_id"],
+        model=state.get("model"),
     )
     state["compliance_result"] = result["updated_result"]
     state["should_retry"] = result["should_retry"] and state["retry_count"] < _MAX_RETRIES
@@ -221,12 +230,14 @@ async def _run_single_question(
     question: ComplianceQuestion,
     contract_id: str,
     trace_id: str,
+    model: str = "",
 ) -> QuestionState:
     """Run the full agent graph for one compliance question in a thread executor."""
     initial_state: QuestionState = {
         "question": question,
         "contract_id": contract_id,
         "trace_id": trace_id,
+        "model": model or settings.llm_model,
         "retrieved_chunks": [],
         "sub_criterion_queries": [],
         "router_latency_ms": 0.0,
@@ -281,7 +292,8 @@ async def analyse_contract(
     filename: str,
     contract_id: Optional[str] = None,
     trace_id: Optional[str] = None,
-    job_update_callback=None,  # optional callback for UI progress
+    job_update_callback=None,
+    model: Optional[str] = None,
 ) -> ContractAnalysisResponse:
     """
     Full end-to-end pipeline:
@@ -355,8 +367,9 @@ async def analyse_contract(
     await _update("retrieving", 45)
     t = time.perf_counter()
 
+    active_model = model or settings.llm_model
     question_tasks = [
-        _run_single_question(q, contract_id, trace_id)
+        _run_single_question(q, contract_id, trace_id, model=active_model)
         for q in COMPLIANCE_QUESTIONS
     ]
     question_states = await asyncio.gather(*question_tasks, return_exceptions=False)
@@ -390,7 +403,7 @@ async def analyse_contract(
     timings["evaluation_ms"] = eval_ms_total
     total_duration_ms = (time.perf_counter() - pipeline_t0) * 1000
 
-    in_cost, out_cost = _cost_for_model(settings.llm_model)
+    in_cost, out_cost = _cost_for_model(active_model)
     estimated_cost = (
         total_input_tokens * in_cost
         + total_output_tokens * out_cost
@@ -430,7 +443,7 @@ async def analyse_contract(
             total_output_tokens=total_output_tokens,
             estimated_cost_usd=estimated_cost,
             retry_count=sum(s.get("retry_count", 0) for s in question_states),
-            model_used=settings.llm_model,
+            model_used=active_model,
             chunks_retrieved_per_question=len(chunks),
         ),
     )
@@ -448,7 +461,7 @@ async def analyse_contract(
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
         estimated_cost_usd=estimated_cost,
-        model_used=settings.llm_model,
+        model_used=active_model,
         retry_count=sum(s.get("retry_count", 0) for s in question_states),
         avg_confidence=avg_confidence,
         full_result_json=_json.dumps(_response_obj.model_dump(mode="json")),

@@ -17,7 +17,6 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from backend.compliance.questions import ComplianceQuestion
@@ -28,6 +27,7 @@ from backend.compliance.schemas import (
     SubCriterionResult,
 )
 from backend.config import settings
+from backend.llm_factory import get_llm
 from backend.observability.logger import get_logger
 
 logger = get_logger(__name__)
@@ -57,11 +57,11 @@ Confidence calibration:
 You must call the submit_compliance_result tool with your analysis. Do not return plain text.
 """
 
-# Tool schema — the LLM is forced to call this, guaranteeing valid structured output
+# Tool schema in standard JSON Schema format — works for both Anthropic and OpenAI via LangChain
 _COMPLIANCE_TOOL = {
     "name": "submit_compliance_result",
     "description": "Submit the structured compliance analysis result.",
-    "input_schema": {
+    "parameters": {
         "type": "object",
         "properties": {
             "compliance_state": {
@@ -117,6 +117,7 @@ def run_compliance_agent(
     evaluator_feedback: Optional[str] = None,
     previous_result: Optional[ComplianceResult] = None,
     retry_count: int = 0,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run the compliance analysis for one question.
@@ -133,10 +134,11 @@ def run_compliance_agent(
         Dict containing a validated ComplianceResult plus token usage.
     """
     t0 = time.perf_counter()
-    llm = ChatAnthropic(model=settings.llm_model, max_tokens=2048, api_key=settings.anthropic_api_key)
+    active_model = model or settings.llm_model
+    llm = get_llm(active_model, max_tokens=2048)
     llm_with_tools = llm.bind_tools(
         [_COMPLIANCE_TOOL],
-        tool_choice={"type": "tool", "name": "submit_compliance_result"},
+        tool_choice="submit_compliance_result",
     )
 
     context_text = _format_chunks_for_prompt(retrieved_chunks)
@@ -175,7 +177,7 @@ def run_compliance_agent(
         num_chunks=len(retrieved_chunks),
         is_retry=retry_count > 0,
         retry_count=retry_count,
-        model=settings.llm_model,
+        model=active_model,
     )
 
     response = llm_with_tools.invoke(messages)

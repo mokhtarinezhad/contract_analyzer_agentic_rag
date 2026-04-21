@@ -118,8 +118,41 @@ with st.sidebar:
 
     page = st.radio(
         "Navigate",
-        ["Analyze Contract", "KPI Dashboard", "Chat", "Process Monitor"],
+        ["Guide", "Analyze Contract", "KPI Dashboard", "Chat", "Process Monitor"],
+        index=1,
+    )
+
+    st.divider()
+    st.markdown(
+        "<div style='font-size:0.65rem;color:#6b7280;letter-spacing:1.2px;"
+        "text-transform:uppercase;margin-bottom:4px'>LLM Model</div>",
+        unsafe_allow_html=True,
+    )
+
+    _MODEL_OPTIONS = {
+        "claude-sonnet-4-6":         "Sonnet 4.6 — Balanced (default)",
+        "claude-opus-4-7":           "Opus 4.7 — Most Capable",
+        "claude-haiku-4-5-20251001": "Haiku 4.5 — Fastest",
+        "gpt-4o":                    "GPT-4o — Most Capable",
+        "gpt-4o-mini":               "GPT-4o Mini — Balanced",
+        "gpt-4-turbo":               "GPT-4 Turbo — Advanced",
+    }
+
+    selected_model = st.selectbox(
+        "model",
+        options=list(_MODEL_OPTIONS.keys()),
+        format_func=lambda k: _MODEL_OPTIONS[k],
         index=0,
+        label_visibility="collapsed",
+    )
+    st.session_state["selected_model"] = selected_model
+
+    provider = "Anthropic" if selected_model.startswith("claude") else "OpenAI"
+    provider_color = "#a855f7" if provider == "Anthropic" else "#10b981"
+    st.markdown(
+        f"<div style='font-size:0.68rem;color:{provider_color};margin-top:2px'>"
+        f"Provider: {provider}</div>",
+        unsafe_allow_html=True,
     )
 
     st.divider()
@@ -293,6 +326,7 @@ def page_analyze():
                     "post",
                     "/analyze",
                     files={"file": (uploaded.name, uploaded.getvalue(), "application/pdf")},
+                    data={"model": st.session_state.get("selected_model", "claude-sonnet-4-6")},
                 )
 
             if response is not None:
@@ -1091,6 +1125,245 @@ def page_monitor():
                         st.markdown(_terminal_wrap(content, height=600), unsafe_allow_html=True)
                     else:
                         st.warning("No events found for this trace.")
+
+
+# ─────────────────────────────────────────────
+# PAGE 0: Guide
+# ─────────────────────────────────────────────
+
+def page_guide():
+    # ── Hero ──────────────────────────────────────────────────────────────
+    st.markdown(
+        """
+        <div style="
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 60%, #2e1065 100%);
+            border-radius: 16px; padding: 48px 40px 40px 40px; margin-bottom: 32px;
+            border: 1px solid #312e81;
+        ">
+            <div style="font-size:0.75rem;color:#a855f7;letter-spacing:3px;
+                        text-transform:uppercase;margin-bottom:10px;">
+                247Labs · AI Engineering
+            </div>
+            <div style="font-size:2.4rem;font-weight:900;color:#f1f5f9;line-height:1.15;
+                        margin-bottom:14px;">
+                Contract Compliance Analyzer
+            </div>
+            <div style="font-size:1.05rem;color:#94a3b8;max-width:680px;line-height:1.7;">
+                An intelligent, fully automated pipeline that reads a PDF contract and
+                determines — in minutes — whether it meets your organisation's security
+                and compliance requirements. Every finding is grounded in verbatim
+                contract language with hallucination detection built in.
+            </div>
+            <div style="margin-top:24px;display:flex;gap:12px;flex-wrap:wrap;">
+                <span style="background:#1e3a5f;color:#38bdf8;padding:6px 14px;
+                             border-radius:20px;font-size:0.78rem;font-weight:600;">
+                    ⚡ 2–5 min per contract
+                </span>
+                <span style="background:#1e3a1e;color:#4ade80;padding:6px 14px;
+                             border-radius:20px;font-size:0.78rem;font-weight:600;">
+                    ✅ Hallucination-checked
+                </span>
+                <span style="background:#2e1065;color:#a855f7;padding:6px 14px;
+                             border-radius:20px;font-size:0.78rem;font-weight:600;">
+                    🤖 Agentic RAG Pipeline
+                </span>
+                <span style="background:#1c1917;color:#fb923c;padding:6px 14px;
+                             border-radius:20px;font-size:0.78rem;font-weight:600;">
+                    💰 ~$0.05–$0.15 per analysis
+                </span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── How it works ──────────────────────────────────────────────────────
+    st.markdown("### How It Works")
+    steps = [
+        ("📄", "Upload",    "Drop in any PDF contract — vendor agreements, MSAs, SOWs, NDAs."),
+        ("🔍", "Parse",     "The system extracts text, tables, and section structure using deep-learning layout analysis."),
+        ("🔢", "Embed",     "Content is split into semantically meaningful chunks and indexed locally with vector embeddings."),
+        ("🔀", "Retrieve",  "For each compliance criterion, a Router Agent plans targeted queries and fetches the most relevant evidence."),
+        ("🤖", "Analyse",   "A Compliance Agent evaluates every sub-criterion against the retrieved evidence and extracts verbatim quotes."),
+        ("🧐", "Verify",    "An Evaluator Agent cross-checks every quote for accuracy, flags hallucinations, and retries weak determinations."),
+        ("📊", "Report",    "Results are returned as structured, auditable output with confidence scores, sub-criterion breakdowns, and cost tracking."),
+    ]
+    cols = st.columns(len(steps))
+    for col, (icon, title, desc) in zip(cols, steps):
+        col.markdown(
+            f"""
+            <div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;
+                        padding:16px 12px;text-align:center;height:180px;">
+                <div style="font-size:1.8rem">{icon}</div>
+                <div style="font-size:0.78rem;font-weight:700;color:#e2e8f0;
+                            margin:6px 0 4px 0">{title}</div>
+                <div style="font-size:0.7rem;color:#64748b;line-height:1.5">{desc}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Manual vs Automated ───────────────────────────────────────────────
+    st.markdown("### Manual Review vs. This System")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(
+            """
+            <div style="background:#1c0a0a;border:1px solid #7f1d1d;border-radius:12px;padding:24px;">
+                <div style="font-size:1rem;font-weight:700;color:#f87171;margin-bottom:16px;">
+                    ❌ Manual Contract Review
+                </div>
+                <ul style="color:#fca5a5;font-size:0.85rem;line-height:2;list-style:none;padding:0;margin:0">
+                    <li>⏱ 3–8 hours per contract</li>
+                    <li>💸 $150–$500 in legal / compliance time</li>
+                    <li>🧠 Inconsistent — depends on reviewer expertise</li>
+                    <li>📋 No audit trail or confidence scoring</li>
+                    <li>🔁 Non-scalable — bottleneck at volume</li>
+                    <li>⚠️ Risk of missed clauses in long documents</li>
+                </ul>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            """
+            <div style="background:#031a0f;border:1px solid #14532d;border-radius:12px;padding:24px;">
+                <div style="font-size:1rem;font-weight:700;color:#4ade80;margin-bottom:16px;">
+                    ✅ Contract Analyzer
+                </div>
+                <ul style="color:#86efac;font-size:0.85rem;line-height:2;list-style:none;padding:0;margin:0">
+                    <li>⚡ 2–5 minutes per contract</li>
+                    <li>💰 $0.05–$0.15 in compute cost</li>
+                    <li>🎯 Deterministic, criteria-driven analysis</li>
+                    <li>📑 Full audit trail with verbatim quotes</li>
+                    <li>🚀 Scales to hundreds of contracts per day</li>
+                    <li>🛡 3-layer hallucination detection built in</li>
+                </ul>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Compliance domains ────────────────────────────────────────────────
+    st.markdown("### Compliance Domains Analysed")
+    domains = [
+        ("🔐", "Password Management",
+         "Checks 7 sub-criteria: password length, default prohibition, secure storage, brute-force protection, sharing ban, credential vaulting, and rotation policy."),
+        ("🖥", "IT Asset Management",
+         "Verifies asset inventory completeness, required fields, quarterly reconciliation, configuration baselines, and drift remediation procedures."),
+        ("🎓", "Security Training & Background Checks",
+         "Confirms on-hire and annual security training, background screening requirements, and policy attestation obligations."),
+        ("🔒", "Data in Transit Encryption",
+         "Validates TLS 1.2+ enforcement, TLS 1.3 preference, admin pathway encryption, subprocessor transfer controls, and certificate management."),
+        ("🌐", "Network Authentication & Authorization",
+         "Reviews authentication mechanisms, MFA requirements, secure admin pathways, session logging, and RBAC implementation."),
+    ]
+    for icon, title, desc in domains:
+        st.markdown(
+            f"""
+            <div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;
+                        padding:16px 20px;margin-bottom:10px;display:flex;align-items:flex-start;gap:14px;">
+                <div style="font-size:1.5rem;margin-top:2px">{icon}</div>
+                <div>
+                    <div style="font-size:0.9rem;font-weight:700;color:#e2e8f0">{title}</div>
+                    <div style="font-size:0.8rem;color:#64748b;margin-top:4px;line-height:1.6">{desc}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Who it helps ──────────────────────────────────────────────────────
+    st.markdown("### Who Benefits")
+    industries = [
+        ("🏦", "Financial Services",
+         "Review vendor and cloud provider contracts for data security compliance before onboarding."),
+        ("🏥", "Healthcare",
+         "Verify that BAAs and service agreements meet HIPAA-aligned security obligations."),
+        ("⚖️", "Legal & Procurement",
+         "Accelerate contract review cycles and flag gaps before negotiations close."),
+        ("🏛", "Government & Public Sector",
+         "Ensure vendor contracts align with security frameworks like FedRAMP, NIST, or ISO 27001."),
+        ("🏗", "Enterprise IT / CISO Office",
+         "Continuously monitor a portfolio of active vendor contracts for compliance drift."),
+    ]
+    cols = st.columns(len(industries))
+    for col, (icon, title, desc) in zip(cols, industries):
+        col.markdown(
+            f"""
+            <div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;
+                        padding:16px 12px;height:170px;">
+                <div style="font-size:1.5rem">{icon}</div>
+                <div style="font-size:0.8rem;font-weight:700;color:#e2e8f0;margin:6px 0 6px 0">{title}</div>
+                <div style="font-size:0.72rem;color:#64748b;line-height:1.5">{desc}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Adaptability ──────────────────────────────────────────────────────
+    st.markdown("### Adapt It to Any Use Case")
+    st.markdown(
+        """
+        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:28px 32px;">
+            <div style="color:#94a3b8;font-size:0.88rem;line-height:1.9">
+                The compliance questions are defined in a single file
+                (<code style="color:#a855f7;background:#1e1035;padding:1px 5px;border-radius:3px">
+                backend/compliance/questions.py</code>)
+                as plain Python objects — no prompt engineering required to add new criteria.
+                <br><br>
+                <b style="color:#e2e8f0">Examples of other frameworks this system can be re-pointed at:</b>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;">
+        """,
+        unsafe_allow_html=True,
+    )
+    frameworks = ["SOC 2 Type II", "ISO 27001", "HIPAA", "GDPR", "NIST CSF", "PCI-DSS",
+                  "FedRAMP", "CIS Controls", "CCPA", "Custom SLA Terms"]
+    badges = "".join(
+        f"<span style='background:#1e1b4b;color:#a78bfa;padding:5px 12px;"
+        f"border-radius:16px;font-size:0.78rem;font-weight:600'>{f}</span>"
+        for f in frameworks
+    )
+    st.markdown(
+        f"<div style='display:flex;flex-wrap:wrap;gap:10px;padding:0 32px 28px 32px'>{badges}</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Footer contact ────────────────────────────────────────────────────
+    st.markdown(
+        """
+        <div style="background:#0f172a;border:1px solid #312e81;border-radius:12px;
+                    padding:28px 32px;text-align:center;">
+            <div style="font-size:0.75rem;color:#6b7280;letter-spacing:2px;
+                        text-transform:uppercase;margin-bottom:8px;">Built by</div>
+            <div style="font-size:1.1rem;font-weight:700;color:#e2e8f0">Farshid Mokhtarinezhad</div>
+            <div style="font-size:0.82rem;color:#a855f7;margin:4px 0 12px 0">
+                Senior AI Engineer · 247Labs
+            </div>
+            <a href="mailto:farshid.mokhtarinezhad@247labs.com"
+               style="color:#64748b;font-size:0.8rem;text-decoration:none;">
+                ✉ farshid.mokhtarinezhad@247labs.com
+            </a>
+            <div style="margin-top:16px;font-size:0.72rem;color:#374151;">
+                © 2025 247Labs Inc. — All commercial use rights reserved.
+                See NOTICE.md for full terms.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────

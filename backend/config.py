@@ -19,8 +19,10 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # ── LLM ──────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""  # loaded from .env — never commit the value
+    openai_api_key: str = ""     # loaded from .env — never commit the value
     llm_model: str = "claude-sonnet-4-6"
     # Options: claude-sonnet-4-6 | claude-opus-4-7 | claude-haiku-4-5-20251001
+    #          gpt-4o | gpt-4o-mini | gpt-4-turbo
 
     # ── PDF Parsing ───────────────────────────────────────────────────────
     pdf_parse_strategy: str = "hi_res"
