@@ -40,6 +40,7 @@ from backend.observability.metrics_store import (
     get_latency_trend_df,
     get_question_results_df,
     init_db,
+    list_law_references,
 )
 
 configure_logging()
@@ -118,8 +119,8 @@ with st.sidebar:
 
     page = st.radio(
         "Navigate",
-        ["Guide", "Analyze Contract", "KPI Dashboard", "Chat", "Process Monitor"],
-        index=1,
+        ["Guide", "Law Library", "Analyze Contract", "KPI Dashboard", "Chat", "Process Monitor"],
+        index=2,
     )
 
     st.divider()
@@ -233,23 +234,25 @@ def _call_api(method: str, endpoint: str, **kwargs):
 # ─────────────────────────────────────────────
 
 _STEP_LABELS = {
-    "pending":     "⏳ Queued — waiting to start...",
-    "parsing_pdf": "📄 Step 1/5 — Parsing PDF (extracting text, tables, layout)...",
-    "chunking":    "✂️  Step 2/5 — Chunking into section-aware passages...",
-    "embedding":   "🔢 Step 3/5 — Embedding chunks with sentence-transformers...",
-    "indexing":    "🗄️  Step 4/5 — Indexing vectors into ChromaDB...",
-    "retrieving":  "🔍 Step 5/5 — Retrieving evidence per sub-criterion (hybrid search)...",
-    "analyzing":   "🤖 Step 5/5 — Compliance Agent analysing all 5 questions in parallel...",
-    "evaluating":  "🧐 Step 5/5 — Evaluator checking quotes and grading outputs...",
-    "completed":   "✅ Analysis complete!",
+    "pending":      "⏳ Queued — waiting to start...",
+    "parsing_pdf":  "📄 Step 1/6 — Parsing PDF (extracting text, tables, layout)...",
+    "chunking":     "✂️  Step 2/6 — Chunking into section-aware passages...",
+    "embedding":    "🔢 Step 3/6 — Embedding chunks with sentence-transformers...",
+    "indexing":     "🗄️  Step 4/6 — Indexing contract vectors into ChromaDB...",
+    "classifying":  "🔎 Step 5/6 — Classifying contract — selecting applicable ESA questions...",
+    "retrieving":   "🔍 Step 6/6 — Retrieving evidence from contract + ESA act (dual-source)...",
+    "analyzing":    "🤖 Step 6/6 — Compliance Agent analysing applicable ESA questions in parallel...",
+    "evaluating":   "🧐 Step 6/6 — Evaluator checking quotes and grounding against ESA...",
+    "completed":    "✅ Analysis complete!",
 }
 
 
 def page_analyze():
-    st.header("Contract Compliance Analysis")
+    st.header("Employment Contract — ESA Compliance Analysis")
     st.caption(
-        "Upload a PDF contract. The system will analyse it against 5 compliance "
-        "requirements using an Agentic RAG pipeline."
+        "Upload an employment contract PDF. The system will automatically determine "
+        "which Employment Standards Act of Ontario (ESA) requirements apply, then "
+        "analyse each one using dual-source Agentic RAG (contract + ESA act text)."
     )
 
     job_running = st.session_state.get("job_running", False)
@@ -312,6 +315,19 @@ def page_analyze():
         help="Born-digital PDF recommended. Max 50 MB.",
     )
 
+    # Law selector — only show ready laws
+    laws = list_law_references(ready_only=True)
+    law_options = {"default": "Default (built-in ESA)"}
+    for law in laws:
+        law_options[law["law_id"]] = law["display_name"]
+
+    selected_law_id = st.selectbox(
+        "Check contract against",
+        options=list(law_options.keys()),
+        format_func=lambda k: law_options[k],
+        help="Select a law reference from the Law Library, or use the built-in ESA.",
+    )
+
     if uploaded is not None:
         col1, col2 = st.columns([1, 3])
         with col1:
@@ -321,12 +337,16 @@ def page_analyze():
             analyze_btn = st.button("Analyze Contract", type="primary", use_container_width=True)
 
         if analyze_btn:
+            law_id_to_send = "" if selected_law_id == "default" else selected_law_id
             with st.spinner("Submitting analysis job..."):
                 response = _call_api(
                     "post",
                     "/analyze",
                     files={"file": (uploaded.name, uploaded.getvalue(), "application/pdf")},
-                    data={"model": st.session_state.get("selected_model", "claude-sonnet-4-6")},
+                    data={
+                        "model": st.session_state.get("selected_model", "claude-sonnet-4-6"),
+                        "law_id": law_id_to_send,
+                    },
                 )
 
             if response is not None:
@@ -369,22 +389,25 @@ def page_analyze():
 
 def _render_results(result_data: dict, trace_id: str):
     st.divider()
-    st.subheader("Compliance Analysis Results")
+    st.subheader("ESA Compliance Analysis Results")
 
     results = result_data.get("results", [])
     meta = result_data.get("processing_metadata", {})
 
     # Summary cards
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     fully = sum(1 for r in results if r["compliance_state"] == "Fully Compliant")
     partial = sum(1 for r in results if r["compliance_state"] == "Partially Compliant")
     non = sum(1 for r in results if r["compliance_state"] == "Non-Compliant")
     avg_conf = sum(r["confidence"] for r in results) / max(len(results), 1)
+    q_analyzed = meta.get("questions_analyzed", len(results))
+    q_skipped = meta.get("questions_skipped", 0)
 
-    c1.metric("Fully Compliant", fully, delta=None)
+    c1.metric("Fully Compliant", fully)
     c2.metric("Partially Compliant", partial)
     c3.metric("Non-Compliant", non)
     c4.metric("Avg Confidence", f"{avg_conf:.0%}")
+    c5.metric("Questions Analyzed", q_analyzed, help=f"{q_skipped} ESA questions skipped (not applicable to this contract)")
 
     st.divider()
 
@@ -394,8 +417,14 @@ def _render_results(result_data: dict, trace_id: str):
         emoji = STATE_EMOJI.get(state, "")
         conf = result.get("confidence", 0)
         title = result.get("question_title", "")
+        qid = result.get("question_id", "")
+        esa_parts = result.get("esa_parts", [])
+        parts_str = f" | {', '.join(esa_parts)}" if esa_parts else ""
 
-        with st.expander(f"{emoji} Q{result.get('question_id', '?')}: {title} — {state} ({conf:.0%})", expanded=(state != "Fully Compliant")):
+        with st.expander(
+            f"{emoji} [{qid}]{parts_str}: {title} — {state} ({conf:.0%})",
+            expanded=(state != "Fully Compliant"),
+        ):
             col_a, col_b = st.columns([1, 2])
 
             with col_a:
@@ -403,6 +432,19 @@ def _render_results(result_data: dict, trace_id: str):
                 st.markdown(f"**Confidence:** {_confidence_bar(conf)}", unsafe_allow_html=True)
                 if result.get("retry_count", 0) > 0:
                     st.warning(f"Retried {result['retry_count']} time(s)")
+
+                # ESA sections cited
+                act_sections = result.get("act_sections_cited", [])
+                if act_sections:
+                    st.markdown(
+                        "<div style='margin-top:6px'><span style='font-size:0.8rem;color:#6b7280'>ESA Sections:</span> "
+                        + " ".join(
+                            f"<code style='font-size:0.75rem;background:#1e1b4b;color:#a5b4fc;padding:1px 5px;border-radius:3px'>{s}</code>"
+                            for s in act_sections
+                        )
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
 
                 # Evaluator badge
                 ea = result.get("evaluator_assessment")
@@ -422,6 +464,24 @@ def _render_results(result_data: dict, trace_id: str):
                 st.markdown("**Rationale**")
                 st.write(result.get("rationale", "No rationale provided."))
 
+                # Gap summary
+                gap = result.get("gap_summary", "")
+                if gap and gap != "No gaps identified.":
+                    st.markdown(
+                        f"<div style='background:#2d1a1a;border-left:3px solid #e74c3c;"
+                        f"padding:8px 12px;border-radius:4px;margin-top:8px'>"
+                        f"<span style='font-size:0.75rem;color:#f87171;font-weight:600'>GAP vs ESA MINIMUM</span><br>"
+                        f"<span style='font-size:0.85rem;color:#fca5a5'>{gap}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                elif gap == "No gaps identified.":
+                    st.markdown(
+                        "<div style='background:#1a2d1a;border-left:3px solid #2ecc71;"
+                        "padding:6px 12px;border-radius:4px;margin-top:8px'>"
+                        "<span style='font-size:0.8rem;color:#4ade80'>No gaps vs ESA minimum</span></div>",
+                        unsafe_allow_html=True,
+                    )
+
             # Sub-criteria table
             sc_results = result.get("sub_criteria_results", [])
             if sc_results:
@@ -429,22 +489,42 @@ def _render_results(result_data: dict, trace_id: str):
                 sc_df = pd.DataFrame([
                     {
                         "ID": sc["criterion_id"],
-                        "Description": sc["description"][:70] + "...",
-                        "Found": "✅" if sc["found"] else "❌",
-                        "Evidence": sc.get("evidence_summary", "")[:100],
+                        "ESA Section": sc.get("esa_section", ""),
+                        "Description": sc["description"][:65] + ("..." if len(sc["description"]) > 65 else ""),
+                        "Met": "✅" if sc["found"] else "❌",
+                        "Evidence": sc.get("evidence_summary", "")[:90],
                     }
                     for sc in sc_results
                 ])
                 st.dataframe(sc_df, use_container_width=True, hide_index=True)
 
-            # Relevant quotes
+            # Quotes — separated by source
             quotes = result.get("relevant_quotes", [])
-            if quotes:
-                st.markdown("**Relevant Contract Quotes**")
-                for q in quotes:
+            contract_quotes = [q for q in quotes if q.get("source", "contract") == "contract"]
+            act_quotes = [q for q in quotes if q.get("source") == "act"]
+
+            if contract_quotes:
+                st.markdown("**Contract Quotes**")
+                for q in contract_quotes:
                     st.markdown(
-                        f"> *\"{q['text']}\"*  \n"
-                        f"> — {q.get('section_reference', 'Unknown section')}"
+                        f"<div style='background:#1e1e2e;border-left:3px solid #3498db;"
+                        f"padding:8px 12px;border-radius:4px;margin:4px 0'>"
+                        f"<span style='font-size:0.75rem;color:#60a5fa'>CONTRACT</span><br>"
+                        f"<em style='color:#e2e8f0'>\"{q['text']}\"</em><br>"
+                        f"<span style='font-size:0.78rem;color:#94a3b8'>— {q.get('section_reference', '')}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+
+            if act_quotes:
+                st.markdown("**ESA Act Quotes**")
+                for q in act_quotes:
+                    st.markdown(
+                        f"<div style='background:#1e2e1e;border-left:3px solid #2ecc71;"
+                        f"padding:8px 12px;border-radius:4px;margin:4px 0'>"
+                        f"<span style='font-size:0.75rem;color:#4ade80'>ESA ACT</span><br>"
+                        f"<em style='color:#e2e8f0'>\"{q['text']}\"</em><br>"
+                        f"<span style='font-size:0.78rem;color:#94a3b8'>— {q.get('section_reference', '')}</span></div>",
+                        unsafe_allow_html=True,
                     )
 
     # Processing metadata
@@ -1367,11 +1447,103 @@ def page_guide():
 
 
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# PAGE: Law Library
+# ─────────────────────────────────────────────
+
+def page_law_library():
+    st.header("Law Library")
+    st.caption(
+        "Upload any law or regulation as a PDF and give it a custom name. "
+        "Once indexed, it appears in the Analyze Contract page as a check target. "
+        "Uploaded laws are permanent — they persist across sessions."
+    )
+
+    st.subheader("Upload New Law")
+    with st.form("upload_law_form", clear_on_submit=True):
+        law_file = st.file_uploader("Law PDF", type=["pdf"], help="Official act / regulation PDF")
+        col_id, col_name = st.columns(2)
+        with col_id:
+            law_id_input = st.text_input(
+                "Law ID (no spaces)",
+                placeholder="e.g. ontario-law-2026",
+                help="Unique identifier. Only letters, numbers, hyphens.",
+            )
+        with col_name:
+            display_name_input = st.text_input(
+                "Display Name",
+                placeholder="e.g. Ontario ESA 2026",
+                help="Human-readable label shown in the law selector.",
+            )
+        submitted = st.form_submit_button("Upload & Index", type="primary")
+
+    if submitted:
+        if law_file is None:
+            st.error("Please select a PDF file.")
+        elif not law_id_input.strip():
+            st.error("Law ID is required.")
+        elif not display_name_input.strip():
+            st.error("Display Name is required.")
+        else:
+            with st.spinner(f"Uploading and indexing '{display_name_input}'…"):
+                resp = _call_api(
+                    "post",
+                    "/laws",
+                    files={"file": (law_file.name, law_file.getvalue(), "application/pdf")},
+                    data={"law_id": law_id_input.strip(), "display_name": display_name_input.strip()},
+                )
+            if resp:
+                st.success(
+                    f"Law **{resp['display_name']}** accepted for indexing. "
+                    f"Refresh in a moment to see it as 'ready'."
+                )
+
+    st.divider()
+    st.subheader("Indexed Laws")
+
+    all_laws_raw = _call_api("get", "/laws") or []
+
+    if not all_laws_raw:
+        st.info("No laws indexed yet. Upload your first law PDF above.")
+    else:
+        for law in all_laws_raw:
+            status = law.get("status", "unknown")
+            status_color = {"ready": "#2ecc71", "indexing": "#f39c12", "failed": "#e74c3c"}.get(status, "#95a5a6")
+            status_label = {"ready": "✅ Ready", "indexing": "⏳ Indexing…", "failed": "❌ Failed"}.get(status, status)
+
+            with st.expander(
+                f"**{law['display_name']}**  —  `{law['law_id']}`  —  "
+                f"<span style='color:{status_color}'>{status_label}</span>",
+                expanded=False,
+            ):
+                c1, c2, c3 = st.columns(3)
+                c1.markdown(f"**File:** {law.get('filename', '—')}")
+                c2.markdown(f"**Chunks:** {law.get('chunk_count', 0)}")
+                c3.markdown(f"**Uploaded:** {str(law.get('uploaded_at', ''))[:16].replace('T', ' ')}")
+                c1.markdown(f"**Collection:** `{law.get('collection_name', '—')}`")
+                c2.markdown(
+                    f"<span style='color:{status_color};font-weight:600'>{status_label}</span>",
+                    unsafe_allow_html=True,
+                )
+                if status == "ready":
+                    if st.button("Delete", key=f"del_law_{law['law_id']}", type="secondary"):
+                        result = _call_api("delete", f"/laws/{law['law_id']}")
+                        if result:
+                            st.success(f"Law '{law['law_id']}' deleted.")
+                            st.rerun()
+
+    if st.button("Refresh", key="refresh_laws"):
+        st.rerun()
+
+
+# ─────────────────────────────────────────────
 # Router
 # ─────────────────────────────────────────────
 
 if page == "Guide":
     page_guide()
+elif page == "Law Library":
+    page_law_library()
 elif page == "Analyze Contract":
     page_analyze()
 elif page == "KPI Dashboard":

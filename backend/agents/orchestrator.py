@@ -1,16 +1,16 @@
 """
-LangGraph Orchestrator.
+LangGraph Orchestrator — ESA Employment Contract Compliance Pipeline.
 
-Wires the Router → Compliance → Evaluator pipeline into a state machine
-with conditional retry edges. All 5 compliance questions run concurrently
-via asyncio to minimise wall-clock time.
+Pipeline:
+  1. Parse PDF
+  2. Chunk + Embed + Index (contract)
+  3. Classify contract → select applicable ESA questions
+  4. Run applicable questions concurrently (Router → Compliance → Evaluator)
+  5. Collect, validate, and persist results
 
 Graph topology (per question):
   START → router → compliance → evaluator ─┬─(PASS/PASS_WITH_FLAGS)─→ END
                                             └─(FAIL, retry < max)────→ compliance
-
-State for each question is an independent TypedDict instance so concurrent
-questions don't share mutable state.
 """
 
 from __future__ import annotations
@@ -22,10 +22,11 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from backend.agents.classifier_agent import run_classifier_agent
 from backend.agents.compliance_agent import run_compliance_agent
 from backend.agents.evaluator_agent import run_evaluator_agent
 from backend.agents.router_agent import run_router_agent
-from backend.compliance.questions import COMPLIANCE_QUESTIONS, ComplianceQuestion
+from backend.compliance.eao_questions import ESAComplianceQuestion, get_question_by_id
 from backend.compliance.schemas import (
     ComplianceResult,
     ComplianceState,
@@ -49,19 +50,15 @@ logger = get_logger(__name__)
 
 _MAX_RETRIES = settings.max_retry_count
 
-# Per-model token pricing (USD per token). Keep in sync with the LLM provider's
-# published pricing when models are added or prices change.
 _MODEL_COSTS: Dict[str, tuple[float, float]] = {
-    # Anthropic
-    "claude-opus-4-7":           (15e-6, 75e-6),   # $15 / $75 per 1M
-    "claude-sonnet-4-6":         (3e-6,  15e-6),   # $3  / $15 per 1M
-    "claude-haiku-4-5-20251001": (1e-6,  5e-6),    # $1  / $5  per 1M
-    # OpenAI
-    "gpt-4o":                    (2.5e-6, 10e-6),  # $2.5 / $10 per 1M
-    "gpt-4o-mini":               (0.15e-6, 0.6e-6),# $0.15 / $0.60 per 1M
-    "gpt-4-turbo":               (10e-6,  30e-6),  # $10 / $30 per 1M
+    "claude-opus-4-7":           (15e-6, 75e-6),
+    "claude-sonnet-4-6":         (3e-6,  15e-6),
+    "claude-haiku-4-5-20251001": (1e-6,  5e-6),
+    "gpt-4o":                    (2.5e-6, 10e-6),
+    "gpt-4o-mini":               (0.15e-6, 0.6e-6),
+    "gpt-4-turbo":               (10e-6,  30e-6),
 }
-_DEFAULT_COSTS = (3e-6, 15e-6)  # fallback when an unknown model is configured
+_DEFAULT_COSTS = (3e-6, 15e-6)
 
 
 def _cost_for_model(model_name: str) -> tuple[float, float]:
@@ -73,12 +70,14 @@ def _cost_for_model(model_name: str) -> tuple[float, float]:
 # ─────────────────────────────────────────────
 
 class QuestionState(TypedDict):
-    question: ComplianceQuestion
+    question: ESAComplianceQuestion
     contract_id: str
     trace_id: str
     model: str
+    act_collection_name: str        # which law collection to query
     # Router output
-    retrieved_chunks: List[dict]
+    retrieved_chunks: List[dict]    # contract chunks
+    act_chunks: List[dict]          # law act chunks
     sub_criterion_queries: List[dict]
     router_latency_ms: float
     # Compliance agent output
@@ -90,7 +89,7 @@ class QuestionState(TypedDict):
     evaluator_latency_ms: float
     # Retry tracking
     retry_count: int
-    # Token accumulator for this question
+    # Token accumulator
     total_input_tokens: int
     total_output_tokens: int
 
@@ -105,8 +104,10 @@ def _router_node(state: QuestionState) -> QuestionState:
         contract_id=state["contract_id"],
         trace_id=state["trace_id"],
         model=state.get("model"),
+        act_collection_name=state.get("act_collection_name") or None,
     )
     state["retrieved_chunks"] = result["retrieved_chunks"]
+    state["act_chunks"] = result.get("act_chunks", [])
     state["sub_criterion_queries"] = result["sub_criterion_queries"]
     state["router_latency_ms"] = result["router_latency_ms"]
     state["total_input_tokens"] += result["llm_input_tokens"]
@@ -126,6 +127,7 @@ def _compliance_node(state: QuestionState) -> QuestionState:
     result = run_compliance_agent(
         question=state["question"],
         retrieved_chunks=state["retrieved_chunks"],
+        act_chunks=state["act_chunks"],
         trace_id=state["trace_id"],
         evaluator_feedback=state.get("retry_feedback") if is_retry else None,
         previous_result=state.get("compliance_result") if is_retry else None,
@@ -153,6 +155,7 @@ def _evaluator_node(state: QuestionState) -> QuestionState:
     result = run_evaluator_agent(
         compliance_result=cr,
         retrieved_chunks=state["retrieved_chunks"],
+        act_chunks=state["act_chunks"],
         question_full_text=state["question"].full_text,
         sub_criteria_descriptions=[sc.description for sc in state["question"].sub_criteria],
         trace_id=state["trace_id"],
@@ -178,7 +181,6 @@ def _evaluator_node(state: QuestionState) -> QuestionState:
 
 
 def _should_retry(state: QuestionState) -> str:
-    """Conditional edge: route back to compliance or finish."""
     if state.get("should_retry", False):
         return "retry"
     return "done"
@@ -189,7 +191,6 @@ def _should_retry(state: QuestionState) -> str:
 # ─────────────────────────────────────────────
 
 def _build_question_graph() -> Any:
-    """Build and compile the Router→Compliance→Evaluator LangGraph."""
     builder = StateGraph(QuestionState)
 
     builder.add_node("router", _router_node)
@@ -212,7 +213,7 @@ def _build_question_graph() -> Any:
     return builder.compile()
 
 
-_question_graph = None  # compiled once
+_question_graph = None
 
 
 def _get_question_graph():
@@ -223,22 +224,24 @@ def _get_question_graph():
 
 
 # ─────────────────────────────────────────────
-# Run one question (sync wrapper for async gather)
+# Run one question
 # ─────────────────────────────────────────────
 
 async def _run_single_question(
-    question: ComplianceQuestion,
+    question: ESAComplianceQuestion,
     contract_id: str,
     trace_id: str,
     model: str = "",
+    act_collection_name: str = "",
 ) -> QuestionState:
-    """Run the full agent graph for one compliance question in a thread executor."""
     initial_state: QuestionState = {
         "question": question,
         "contract_id": contract_id,
         "trace_id": trace_id,
         "model": model or settings.llm_model,
+        "act_collection_name": act_collection_name or settings.esa_act_collection_name,
         "retrieved_chunks": [],
+        "act_chunks": [],
         "sub_criterion_queries": [],
         "router_latency_ms": 0.0,
         "compliance_result": None,
@@ -253,13 +256,11 @@ async def _run_single_question(
 
     graph = _get_question_graph()
 
-    # LangGraph invoke is synchronous; run in thread pool to allow async parallelism
     loop = asyncio.get_event_loop()
     final_state = await loop.run_in_executor(
         None, lambda: graph.invoke(initial_state)
     )
 
-    # Record per-question metrics
     cr = final_state.get("compliance_result")
     if cr:
         record_question_result(
@@ -294,10 +295,11 @@ async def analyse_contract(
     trace_id: Optional[str] = None,
     job_update_callback=None,
     model: Optional[str] = None,
+    law_collection_name: Optional[str] = None,
 ) -> ContractAnalysisResponse:
     """
-    Full end-to-end pipeline:
-      PDF → parse → chunk → embed → index → (5x parallel agents) → validate → return
+    Full end-to-end ESA compliance pipeline:
+      PDF → parse → chunk → embed → index → classify → (N×parallel agents) → validate → return
 
     Args:
         pdf_path:             Path to the uploaded PDF.
@@ -305,9 +307,10 @@ async def analyse_contract(
         contract_id:          Unique ID for this contract (generated if None).
         trace_id:             Trace ID for logging (generated if None).
         job_update_callback:  Optional async callable(status, pct) for UI progress.
+        model:                LLM model override.
 
     Returns:
-        ContractAnalysisResponse with 5 validated ComplianceResults.
+        ContractAnalysisResponse with results for all applicable ESA questions.
     """
     init_db()
 
@@ -339,21 +342,20 @@ async def analyse_contract(
     timings["pdf_parse_ms"] = (time.perf_counter() - t) * 1000
 
     # ── Step 2: Chunk ──────────────────────────────────────────────────────
-    await _update("chunking", 18)
+    await _update("chunking", 15)
     chunks: List[DocumentChunk] = chunk_elements(elements, trace_id=trace_id)
-
     if not chunks:
         raise ValueError("PDF produced no text chunks — ensure the file is a text-based PDF")
 
     # ── Step 3: Embed ──────────────────────────────────────────────────────
-    await _update("embedding", 28)
+    await _update("embedding", 25)
     t = time.perf_counter()
     texts = [c.embedding_text if c.embedding_text else c.text for c in chunks]
     embeddings = embed_texts(texts, trace_id=trace_id)
     timings["embedding_ms"] = (time.perf_counter() - t) * 1000
 
     # ── Step 4: Index in vector store ─────────────────────────────────────
-    await _update("indexing", 38)
+    await _update("indexing", 35)
     t = time.perf_counter()
     index_chunks(
         contract_id=contract_id,
@@ -363,28 +365,61 @@ async def analyse_contract(
     )
     timings["retrieval_ms"] = (time.perf_counter() - t) * 1000
 
-    # ── Step 5: Run all 5 questions in parallel ────────────────────────────
-    await _update("retrieving", 45)
+    # ── Step 5: Classify — determine applicable ESA questions ─────────────
+    await _update("classifying", 42)
+    active_model = model or settings.llm_model
+
+    classifier_result = run_classifier_agent(
+        contract_id=contract_id,
+        trace_id=trace_id,
+        model=active_model,
+    )
+    applicable_ids: List[str] = classifier_result["applicable_question_ids"]
+    total_input_tokens += classifier_result["llm_input_tokens"]
+    total_output_tokens += classifier_result["llm_output_tokens"]
+
+    applicable_questions: List[ESAComplianceQuestion] = []
+    for qid in applicable_ids:
+        try:
+            applicable_questions.append(get_question_by_id(qid))
+        except ValueError:
+            logger.warning("unknown_question_id", question_id=qid, trace_id=trace_id)
+
+    skipped_count = len([]) # total ESA questions - applicable
+    from backend.compliance.eao_questions import get_all_questions
+    all_q_count = len(get_all_questions())
+    skipped_count = all_q_count - len(applicable_questions)
+
+    logger.info(
+        "classification_complete",
+        trace_id=trace_id,
+        applicable_count=len(applicable_questions),
+        skipped_count=skipped_count,
+        conditional_triggered=classifier_result["conditional_triggered_ids"],
+    )
+
+    # ── Step 6: Run all applicable questions in parallel ──────────────────
+    await _update("retrieving", 48)
     t = time.perf_counter()
 
-    active_model = model or settings.llm_model
+    active_law_collection = law_collection_name or settings.esa_act_collection_name
     question_tasks = [
-        _run_single_question(q, contract_id, trace_id, model=active_model)
-        for q in COMPLIANCE_QUESTIONS
+        _run_single_question(q, contract_id, trace_id, model=active_model,
+                             act_collection_name=active_law_collection)
+        for q in applicable_questions
     ]
     question_states = await asyncio.gather(*question_tasks, return_exceptions=False)
     timings["llm_ms"] = (time.perf_counter() - t) * 1000
 
     await _update("evaluating", 88)
 
-    # ── Step 6: Collect and validate results ──────────────────────────────
+    # ── Step 7: Collect and validate results ──────────────────────────────
     results: List[ComplianceResult] = []
     eval_ms_total = 0.0
 
     for state in question_states:
         cr = state.get("compliance_result")
         if cr is None:
-            # Fallback for any question that failed catastrophically
             q = state["question"]
             cr = ComplianceResult(
                 question_id=q.id,
@@ -394,6 +429,8 @@ async def analyse_contract(
                 confidence=0.0,
                 relevant_quotes=[],
                 rationale="Pipeline error — manual review required.",
+                gap_summary="Unable to complete analysis due to pipeline error.",
+                esa_parts=q.esa_parts,
             )
         results.append(cr)
         total_input_tokens += state.get("total_input_tokens", 0)
@@ -404,18 +441,16 @@ async def analyse_contract(
     total_duration_ms = (time.perf_counter() - pipeline_t0) * 1000
 
     in_cost, out_cost = _cost_for_model(active_model)
-    estimated_cost = (
-        total_input_tokens * in_cost
-        + total_output_tokens * out_cost
-    )
-
-    avg_confidence = sum(r.confidence for r in results) / len(results)
+    estimated_cost = total_input_tokens * in_cost + total_output_tokens * out_cost
+    avg_confidence = sum(r.confidence for r in results) / max(len(results), 1)
 
     logger.info(
         "analysis_pipeline_complete",
         trace_id=trace_id,
         contract_id=contract_id,
         total_duration_ms=round(total_duration_ms, 2),
+        questions_analyzed=len(results),
+        questions_skipped=skipped_count,
         total_input_tokens=total_input_tokens,
         total_output_tokens=total_output_tokens,
         estimated_cost_usd=round(estimated_cost, 4),
@@ -423,7 +458,7 @@ async def analyse_contract(
         **{k: round(v, 2) for k, v in timings.items()},
     )
 
-    # ── Step 7: Persist metrics ────────────────────────────────────────────
+    # ── Step 8: Persist metrics ────────────────────────────────────────────
     import json as _json
 
     _response_obj = ContractAnalysisResponse(
@@ -445,6 +480,8 @@ async def analyse_contract(
             retry_count=sum(s.get("retry_count", 0) for s in question_states),
             model_used=active_model,
             chunks_retrieved_per_question=len(chunks),
+            questions_analyzed=len(results),
+            questions_skipped=skipped_count,
         ),
     )
 
@@ -468,6 +505,4 @@ async def analyse_contract(
     )
 
     await _update("completed", 100)
-
-    _response_obj.results.sort(key=lambda r: r.question_id)
     return _response_obj

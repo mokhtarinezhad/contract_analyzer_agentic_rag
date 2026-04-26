@@ -44,7 +44,12 @@ def _get_client():
 def get_or_create_collection(contract_id: str):
     """Return the ChromaDB collection for this contract. Creates if absent."""
     client = _get_client()
-    collection_name = _safe_collection_name(contract_id)
+    # ESA act collection uses its own name directly (not prefixed with "contract-")
+    from backend.config import settings as _settings
+    if contract_id == _settings.esa_act_collection_name:
+        collection_name = contract_id
+    else:
+        collection_name = _safe_collection_name(contract_id)
     collection = client.get_or_create_collection(
         name=collection_name,
         metadata={"hnsw:space": "cosine"},  # cosine distance for similarity search
@@ -67,6 +72,44 @@ def _safe_collection_name(contract_id: str) -> str:
     """ChromaDB collection names must be 3–63 chars, alphanumeric + hyphens."""
     cleaned = "".join(c if c.isalnum() or c == "-" else "-" for c in contract_id)
     return f"contract-{cleaned}"[:63]
+
+
+def safe_law_collection_name(law_id: str) -> str:
+    """Derive a stable ChromaDB collection name for a law reference."""
+    cleaned = "".join(c if c.isalnum() or c == "-" else "-" for c in law_id)
+    return f"law-{cleaned}"[:63]
+
+
+def get_or_create_law_collection(law_id: str):
+    """Return (or create) the ChromaDB collection for a law reference."""
+    client = _get_client()
+    collection = client.get_or_create_collection(
+        name=safe_law_collection_name(law_id),
+        metadata={"hnsw:space": "cosine"},
+    )
+    return collection
+
+
+def law_collection_exists(law_id: str) -> bool:
+    """Return True if the law collection has already been indexed."""
+    client = _get_client()
+    name = safe_law_collection_name(law_id)
+    try:
+        col = client.get_collection(name)
+        return col.count() > 0
+    except Exception:
+        return False
+
+
+def delete_law_collection(law_id: str) -> None:
+    """Remove a law reference collection."""
+    client = _get_client()
+    name = safe_law_collection_name(law_id)
+    try:
+        client.delete_collection(name)
+        logger.info("law_collection_deleted", law_id=law_id)
+    except Exception as exc:
+        logger.warning("law_collection_delete_failed", law_id=law_id, error=str(exc))
 
 
 # ─────────────────────────────────────────────

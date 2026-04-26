@@ -18,6 +18,7 @@ from __future__ import annotations
 import time
 from typing import List, Optional
 
+from backend.config import settings
 from backend.ingestion.embedder import embed_query
 from backend.observability.logger import get_logger
 from backend.rag.vector_store import semantic_search
@@ -131,6 +132,33 @@ def retrieve_for_question(
     )
 
     return merged
+
+
+def retrieve_from_act(
+    query: str,
+    top_k: int = 3,
+    trace_id: str = "unknown",
+    collection_name: Optional[str] = None,
+) -> List[dict]:
+    """
+    Retrieve the most relevant law sections for a given query.
+
+    collection_name: ChromaDB collection to search. Defaults to the legacy
+                     eao-act-reference collection if not provided.
+    Returns chunks tagged with source='act'.
+    """
+    target = collection_name or settings.esa_act_collection_name
+    query_vec = embed_query(query)
+    hits = semantic_search(
+        contract_id=target,
+        query_embedding=query_vec,
+        top_k=top_k,
+        trace_id=trace_id,
+    )
+    for hit in hits:
+        hit["source"] = "act"
+        hit["section_title"] = hit.get("section_title") or hit.get("metadata", {}).get("title", "Law")
+    return hits
 
 
 # ─────────────────────────────────────────────

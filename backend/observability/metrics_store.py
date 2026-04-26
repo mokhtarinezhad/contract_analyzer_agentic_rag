@@ -93,10 +93,21 @@ CREATE TABLE IF NOT EXISTS jobs (
     result_json    TEXT
 );
 
+CREATE TABLE IF NOT EXISTS law_references (
+    law_id          TEXT PRIMARY KEY,
+    display_name    TEXT NOT NULL,
+    collection_name TEXT NOT NULL,
+    filename        TEXT NOT NULL,
+    uploaded_at     TEXT NOT NULL,
+    chunk_count     INTEGER DEFAULT 0,
+    status          TEXT DEFAULT 'pending'
+);
+
 CREATE INDEX IF NOT EXISTS idx_analyses_timestamp  ON analyses(analysis_timestamp);
 CREATE INDEX IF NOT EXISTS idx_qr_trace            ON question_results(trace_id);
 CREATE INDEX IF NOT EXISTS idx_spans_trace         ON agent_spans(trace_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_created_at     ON jobs(created_at);
+CREATE INDEX IF NOT EXISTS idx_laws_uploaded_at    ON law_references(uploaded_at);
 """
 
 _MIGRATIONS = [
@@ -188,7 +199,7 @@ def record_analysis(
 
 def record_question_result(
     trace_id: str,
-    question_id: int,
+    question_id: str,
     question_title: str,
     compliance_state: str,
     confidence: float,
@@ -218,7 +229,7 @@ def record_agent_span(
     trace_id: str,
     agent_name: str,
     duration_ms: float,
-    question_id: Optional[int] = None,
+    question_id: Optional[str] = None,
     span_id: Optional[str] = None,
 ) -> None:
     with _lock, _conn() as conn:
@@ -453,3 +464,69 @@ def get_confidence_trend_df(days: int = 30) -> pd.DataFrame:
             """,
             conn,
         )
+
+
+# ─────────────────────────────────────────────
+# Law reference library (persistent law PDFs)
+# ─────────────────────────────────────────────
+
+def create_law_reference(
+    law_id: str,
+    display_name: str,
+    collection_name: str,
+    filename: str,
+    status: str = "pending",
+) -> None:
+    now = datetime.utcnow().isoformat()
+    with _lock, _conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO law_references
+                (law_id, display_name, collection_name, filename, uploaded_at, chunk_count, status)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (law_id, display_name, collection_name, filename, now, 0, status),
+        )
+
+
+def update_law_reference(
+    law_id: str,
+    status: Optional[str] = None,
+    chunk_count: Optional[int] = None,
+) -> None:
+    fields, values = [], []
+    if status is not None:
+        fields.append("status = ?"); values.append(status)
+    if chunk_count is not None:
+        fields.append("chunk_count = ?"); values.append(chunk_count)
+    if not fields:
+        return
+    values.append(law_id)
+    with _lock, _conn() as conn:
+        conn.execute(f"UPDATE law_references SET {', '.join(fields)} WHERE law_id = ?", values)
+
+
+def get_law_reference(law_id: str) -> Optional[dict]:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM law_references WHERE law_id = ?", (law_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_law_references(ready_only: bool = False) -> list[dict]:
+    with _conn() as conn:
+        if ready_only:
+            rows = conn.execute(
+                "SELECT * FROM law_references WHERE status = 'ready' ORDER BY uploaded_at DESC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM law_references ORDER BY uploaded_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_law_reference(law_id: str) -> None:
+    with _lock, _conn() as conn:
+        conn.execute("DELETE FROM law_references WHERE law_id = ?", (law_id,))

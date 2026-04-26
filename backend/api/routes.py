@@ -33,17 +33,21 @@ from backend.compliance.schemas import (
 from backend.observability.logger import get_logger, new_trace_id
 from backend.observability.metrics_store import (
     create_job,
+    create_law_reference,
+    delete_law_reference,
     get_analyses_df,
     get_compliance_distribution_df,
     get_confidence_trend_df,
     get_job,
     get_kpi_summary,
     get_latency_trend_df,
+    get_law_reference,
     get_question_results_df,
     list_jobs,
+    list_law_references,
     update_job,
 )
-from backend.rag.vector_store import delete_collection
+from backend.rag.vector_store import delete_collection, delete_law_collection, safe_law_collection_name
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -62,11 +66,22 @@ async def analyze_contract_endpoint(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="PDF contract file"),
     model: str = Form(DEFAULT_MODEL, description="LLM model to use for analysis"),
+    law_id: str = Form("", description="Law library ID to check against (empty = default ESA)"),
 ):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
     if model not in ALL_MODELS:
         model = DEFAULT_MODEL
+
+    # Resolve the law collection name
+    law_collection_name: str | None = None
+    if law_id:
+        law_ref = get_law_reference(law_id)
+        if law_ref is None:
+            raise HTTPException(status_code=404, detail=f"Law '{law_id}' not found in library")
+        if law_ref["status"] != "ready":
+            raise HTTPException(status_code=400, detail=f"Law '{law_id}' is not ready (status: {law_ref['status']})")
+        law_collection_name = law_ref["collection_name"]
 
     job_id = str(uuid.uuid4())
     trace_id = new_trace_id()
@@ -93,6 +108,7 @@ async def analyze_contract_endpoint(
         job_id=job_id,
         trace_id=trace_id,
         filename=file.filename,
+        law_id=law_id or "default",
         size_bytes=len(pdf_content),
     )
 
@@ -105,6 +121,7 @@ async def analyze_contract_endpoint(
         contract_id=contract_id,
         trace_id=trace_id,
         model=model,
+        law_collection_name=law_collection_name,
     )
 
     return {
@@ -112,6 +129,7 @@ async def analyze_contract_endpoint(
         "trace_id": trace_id,
         "contract_id": contract_id,
         "status": JobStatus.PENDING.value,
+        "law_id": law_id or "default",
         "message": f"Analysis started. Poll GET /api/v1/results/{job_id} for status.",
     }
 
@@ -123,6 +141,7 @@ async def _run_analysis_background(
     contract_id: str,
     trace_id: str,
     model: str = DEFAULT_MODEL,
+    law_collection_name: str | None = None,
 ) -> None:
     """Background task that runs the full analysis pipeline."""
     _valid_statuses = {s.value for s in JobStatus}
@@ -146,6 +165,7 @@ async def _run_analysis_background(
             trace_id=trace_id,
             job_update_callback=_update_job,
             model=model,
+            law_collection_name=law_collection_name,
         )
 
         update_job(
@@ -223,6 +243,103 @@ async def list_jobs_endpoint(limit: int = 50):
 async def delete_contract(contract_id: str):
     delete_collection(contract_id)
     return {"message": f"Contract '{contract_id}' removed from vector store"}
+
+
+# ─────────────────────────────────────────────
+# Law library endpoints
+# ─────────────────────────────────────────────
+
+@router.get("/laws", summary="List all law references (all statuses)")
+async def list_laws():
+    return list_law_references(ready_only=False)
+
+
+@router.post("/laws", summary="Upload and index a law reference PDF")
+async def upload_law(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="Law PDF file"),
+    law_id: str = Form(..., description="Unique identifier, e.g. ontario-law-2026"),
+    display_name: str = Form(..., description="Human-readable label shown in the UI"),
+):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+
+    # Sanitise law_id
+    import re
+    law_id_clean = re.sub(r"[^a-zA-Z0-9\-]", "-", law_id).strip("-")[:60]
+    if not law_id_clean:
+        raise HTTPException(status_code=400, detail="law_id must contain at least one alphanumeric character")
+
+    pdf_content = await file.read()
+    tmp_dir = Path(tempfile.gettempdir()) / "contract_analyzer" / "laws"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = str(tmp_dir / f"{law_id_clean}.pdf")
+    with open(pdf_path, "wb") as f:
+        f.write(pdf_content)
+
+    trace_id = new_trace_id()
+
+    logger.info("law_upload_received", law_id=law_id_clean, display_name=display_name,
+                filename=file.filename, size_bytes=len(pdf_content), trace_id=trace_id)
+
+    # Run ingestion in background so the HTTP response returns immediately
+    from backend.ingestion.law_ingestor import ingest_law_pdf
+    background_tasks.add_task(
+        _run_law_ingestion_background,
+        pdf_path=pdf_path,
+        law_id=law_id_clean,
+        display_name=display_name,
+        filename=file.filename,
+        trace_id=trace_id,
+    )
+
+    return {
+        "law_id": law_id_clean,
+        "display_name": display_name,
+        "status": "indexing",
+        "collection_name": safe_law_collection_name(law_id_clean),
+        "message": "Law PDF accepted and indexing started. Poll GET /api/v1/laws to check status.",
+    }
+
+
+async def _run_law_ingestion_background(
+    pdf_path: str,
+    law_id: str,
+    display_name: str,
+    filename: str,
+    trace_id: str,
+) -> None:
+    from backend.ingestion.law_ingestor import ingest_law_pdf
+    from backend.observability.metrics_store import update_law_reference
+    try:
+        ingest_law_pdf(
+            pdf_path=pdf_path,
+            law_id=law_id,
+            display_name=display_name,
+            filename=filename,
+            trace_id=trace_id,
+        )
+    except Exception as exc:
+        logger.error("law_ingestion_failed", law_id=law_id, error=str(exc))
+        update_law_reference(law_id=law_id, status="failed")
+
+
+@router.get("/laws/{law_id}", summary="Get a single law reference")
+async def get_law(law_id: str):
+    law = get_law_reference(law_id)
+    if law is None:
+        raise HTTPException(status_code=404, detail=f"Law '{law_id}' not found")
+    return law
+
+
+@router.delete("/laws/{law_id}", summary="Remove a law reference and its vector store")
+async def delete_law(law_id: str):
+    law = get_law_reference(law_id)
+    if law is None:
+        raise HTTPException(status_code=404, detail=f"Law '{law_id}' not found")
+    delete_law_collection(law_id)
+    delete_law_reference(law_id)
+    return {"message": f"Law '{law_id}' removed"}
 
 
 # ─────────────────────────────────────────────

@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     max_retry_count: int = 2
     hallucination_match_threshold: float = 0.80
 
+    # ── ESA Reference Knowledge Base ─────────────────────────────────────
+    esa_act_collection_name: str = "eao-act-reference"
+
     # ── MCP Server ────────────────────────────────────────────────────────
     mcp_server_host: str = "127.0.0.1"
     mcp_server_port: int = 8001

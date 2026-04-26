@@ -23,6 +23,8 @@ import time
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
+from typing import Optional
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.compliance.schemas import (
@@ -37,17 +39,28 @@ from backend.observability.logger import get_logger
 
 logger = get_logger(__name__)
 
-_EVALUATOR_SYSTEM_PROMPT = """You are a senior QA analyst reviewing a compliance determination for accuracy and completeness.
+_EVALUATOR_SYSTEM_PROMPT = """You are a senior QA analyst and employment lawyer reviewing an ESA compliance determination for accuracy and completeness.
 You will receive:
-1. The compliance question and its sub-criteria.
-2. The analyst's determination (state, confidence, quotes, rationale).
-3. The original contract excerpts that were provided to the analyst.
+1. The ESA compliance question and its sub-criteria (with ESA section references).
+2. The analyst's determination (state, confidence, quotes, rationale, gap summary).
+3. The original CONTRACT excerpts that were provided to the analyst.
+4. The original ESA ACT excerpts that were provided to the analyst.
 
 Evaluate the determination on these dimensions:
 A. COMPLETENESS: Has each sub-criterion been addressed? Are any skipped without justification?
 B. CONSISTENCY: Does the compliance state logically match the evidence cited?
+   - "Fully Compliant" requires the contract to explicitly meet the ESA minimum — not just silence.
+   - "Partially Compliant" is appropriate when the contract is silent (ESA default applies) or ambiguous.
+   - "Non-Compliant" requires explicit violation (below minimum or void waiver).
 C. CONFIDENCE CALIBRATION: Is the confidence score appropriate given the evidence quality?
-D. GROUNDEDNESS: Do the quoted texts plausibly appear in the provided excerpts?
+D. GROUNDEDNESS: Do the quoted texts actually appear in the provided excerpts?
+   - Contract quotes must appear in CONTRACT excerpts.
+   - Act quotes must appear in ACT excerpts.
+   - Fabricated or paraphrased quotes must be flagged.
+E. ESA ACCURACY: Does the analyst correctly apply the ESA requirements?
+   - Wrong ESA section cited?
+   - ESA threshold incorrectly stated (e.g., overtime at wrong hour)?
+   - Severance formula incorrect?
 
 Return ONLY a valid JSON object (no markdown, no commentary):
 {
@@ -58,9 +71,9 @@ Return ONLY a valid JSON object (no markdown, no commentary):
 }
 
 Verdict guidelines:
-- PASS: determination is accurate, complete, and well-grounded.
+- PASS: determination is accurate, well-grounded, and ESA requirements correctly applied.
 - PASS_WITH_FLAGS: minor issues noted but overall determination is sound.
-- FAIL: significant issues that require re-analysis (e.g., wrong state, major sub-criterion missed, fabricated quotes).
+- FAIL: significant issues requiring re-analysis (wrong state, fabricated quotes, incorrect ESA application, major sub-criterion missed).
 """
 
 
@@ -71,6 +84,7 @@ def run_evaluator_agent(
     sub_criteria_descriptions: List[str],
     trace_id: str,
     model: str | None = None,
+    act_chunks: Optional[List[dict]] = None,
 ) -> Dict[str, Any]:
     """
     Evaluate the Compliance Agent's output.
@@ -96,14 +110,29 @@ def run_evaluator_agent(
     t0 = time.perf_counter()
 
     # ── Layer 1: Deterministic hallucination check ──
-    source_texts = [c.get("text", "") for c in retrieved_chunks]
+    # Contract quotes verified against contract chunks; act quotes against act chunks
+    contract_source_texts = [c.get("text", "") for c in retrieved_chunks]
+    act_source_texts = [c.get("text", "") for c in (act_chunks or [])]
+
+    contract_quote_texts = [q.text for q in compliance_result.relevant_quotes if q.source == "contract"]
+    act_quote_texts = [q.text for q in compliance_result.relevant_quotes if q.source == "act"]
+
     hallucination_flags = _check_hallucinations(
-        quotes=[q.text for q in compliance_result.relevant_quotes],
-        source_texts=source_texts,
+        quotes=contract_quote_texts,
+        source_texts=contract_source_texts,
         threshold=settings.hallucination_match_threshold,
         trace_id=trace_id,
         question_id=compliance_result.question_id,
     )
+    # Also check act quotes against act text
+    act_hallucinations = _check_hallucinations(
+        quotes=act_quote_texts,
+        source_texts=act_source_texts,
+        threshold=settings.hallucination_match_threshold,
+        trace_id=trace_id,
+        question_id=compliance_result.question_id,
+    )
+    hallucination_flags = hallucination_flags + act_hallucinations
 
     # ── Layer 2: LLM critic ──
     llm_assessment, input_tokens, output_tokens = _run_llm_critic(
@@ -113,6 +142,7 @@ def run_evaluator_agent(
         sub_criteria_descriptions=sub_criteria_descriptions,
         trace_id=trace_id,
         model=model,
+        act_chunks=act_chunks,
     )
 
     # Merge hallucination flags into the LLM assessment
@@ -241,37 +271,51 @@ def _run_llm_critic(
     sub_criteria_descriptions: List[str],
     trace_id: str,
     model: str | None = None,
+    act_chunks: Optional[List[dict]] = None,
 ) -> tuple[EvaluatorAssessment, int, int]:
     """Call the LLM via LangChain to critically review the compliance determination."""
     llm = get_llm(model, max_tokens=512)
 
-    # Format the original context
-    context_parts = []
-    for i, chunk in enumerate(retrieved_chunks[:8], 1):  # cap context for efficiency
+    # Format the original contract excerpts
+    contract_context_parts = []
+    for i, chunk in enumerate(retrieved_chunks[:6], 1):
         section = chunk.get("section_title", "Unknown")
-        context_parts.append(f"[Excerpt {i} | {section}]\n{chunk.get('text', '')[:500]}")
+        contract_context_parts.append(f"[Contract Excerpt {i} | {section}]\n{chunk.get('text', '')[:400]}")
+    contract_context = "\n\n".join(contract_context_parts) or "No contract excerpts."
 
-    context_text = "\n\n".join(context_parts) or "No excerpts available."
+    # Format the original act excerpts
+    act_context_parts = []
+    for i, chunk in enumerate((act_chunks or [])[:4], 1):
+        section = chunk.get("section_title") or chunk.get("metadata", {}).get("title", "ESA")
+        act_context_parts.append(f"[ESA Excerpt {i} | {section}]\n{chunk.get('text', '')[:400]}")
+    act_context = "\n\n".join(act_context_parts) or "No ESA excerpts."
 
     sub_criteria_text = "\n".join(
         f"  - {desc}" for desc in sub_criteria_descriptions
     )
 
-    # Format quotes for review
-    quotes_text = "\n".join(
-        f'  [{i+1}] "{q.text[:200]}" ({q.section_reference})'
-        for i, q in enumerate(compliance_result.relevant_quotes[:6])
-    ) or "  No quotes provided."
+    # Format quotes for review — show source
+    contract_quotes_text = "\n".join(
+        f'  [{i+1}] (CONTRACT) "{q.text[:200]}" ({q.section_reference})'
+        for i, q in enumerate(compliance_result.contract_quotes[:4])
+    ) or "  No contract quotes."
+    act_quotes_text = "\n".join(
+        f'  [{i+1}] (ACT) "{q.text[:200]}" ({q.section_reference})'
+        for i, q in enumerate(compliance_result.act_quotes[:4])
+    ) or "  No act quotes."
 
     user_content = (
-        f"## Compliance Question\n{question_full_text}\n\n"
+        f"## ESA Compliance Question\n{question_full_text}\n\n"
         f"## Sub-criteria\n{sub_criteria_text}\n\n"
         f"## Analyst's Determination\n"
         f"- State: {compliance_result.compliance_state.value}\n"
         f"- Confidence: {compliance_result.confidence:.0%}\n"
-        f"- Rationale: {compliance_result.rationale[:800]}\n\n"
-        f"## Quotes Cited\n{quotes_text}\n\n"
-        f"## Original Contract Excerpts\n{context_text}"
+        f"- Gap Summary: {compliance_result.gap_summary[:300]}\n"
+        f"- Rationale: {compliance_result.rationale[:600]}\n\n"
+        f"## Contract Quotes Cited\n{contract_quotes_text}\n\n"
+        f"## ESA Act Quotes Cited\n{act_quotes_text}\n\n"
+        f"## Original Contract Excerpts\n{contract_context}\n\n"
+        f"## Original ESA Act Excerpts\n{act_context}"
     )
 
     logger.debug(

@@ -1,5 +1,5 @@
 """
-Pydantic v2 output schemas for compliance analysis results.
+Pydantic v2 output schemas for ESA compliance analysis results.
 Every agent output and API response is validated against these models.
 """
 
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -34,9 +34,16 @@ class EvaluatorVerdict(str, Enum):
 # ─────────────────────────────────────────────
 
 class RelevantQuote(BaseModel):
-    text: str = Field(..., description="Verbatim text extracted from the contract")
-    section_reference: str = Field(..., description="Section or exhibit reference, e.g. 'Section 6.6'")
-    page_number: Optional[int] = Field(None, description="Page number in the source PDF")
+    text: str = Field(..., description="Verbatim text extracted from the contract or the ESA")
+    section_reference: str = Field(
+        ...,
+        description="Section reference, e.g. 'Section 6.6 — Termination' or 'ESA s.57'",
+    )
+    page_number: Optional[int] = Field(None, description="Page number in the source PDF (contract only)")
+    source: Literal["contract", "act"] = Field(
+        default="contract",
+        description="Whether this quote comes from the uploaded contract or the ESA act text",
+    )
 
     @field_validator("text")
     @classmethod
@@ -51,6 +58,7 @@ class SubCriterionResult(BaseModel):
     description: str
     found: bool = Field(..., description="Whether evidence was found for this sub-criterion")
     evidence_summary: str = Field(..., description="Brief summary of evidence or lack thereof")
+    esa_section: str = Field(default="", description="ESA section reference for this sub-criterion")
 
 
 class EvaluatorAssessment(BaseModel):
@@ -83,6 +91,8 @@ class ProcessingMetadata(BaseModel):
     retry_count: int = 0
     model_used: str
     chunks_retrieved_per_question: int = 0
+    questions_analyzed: int = 0
+    questions_skipped: int = 0
 
 
 # ─────────────────────────────────────────────
@@ -90,23 +100,33 @@ class ProcessingMetadata(BaseModel):
 # ─────────────────────────────────────────────
 
 class ComplianceResult(BaseModel):
-    question_id: int = Field(..., ge=1, le=5)
+    question_id: str = Field(..., description="ESA question ID, e.g. 'ESA-TERM-01'")
     question_title: str
-    compliance_question: str = Field(..., description="Full question text from the spec")
+    compliance_question: str = Field(..., description="Full question text from the ESA question bank")
     compliance_state: ComplianceState
     confidence: float = Field(..., ge=0.0, le=1.0, description="Calibrated confidence 0–1")
     relevant_quotes: List[RelevantQuote] = Field(default_factory=list)
-    rationale: str = Field(..., description="Reasoning referencing specific contract language")
+    rationale: str = Field(..., description="Reasoning referencing specific contract language and ESA sections")
     sub_criteria_results: List[SubCriterionResult] = Field(default_factory=list)
     evaluator_assessment: Optional[EvaluatorAssessment] = None
     retry_count: int = Field(default=0, ge=0)
+    act_sections_cited: List[str] = Field(
+        default_factory=list,
+        description="ESA sections cited in this analysis, e.g. ['ESA s.57', 'ESA s.64']",
+    )
+    gap_summary: str = Field(
+        default="",
+        description="Summary of what is missing or inadequate in the contract vs. ESA requirements",
+    )
+    esa_parts: List[str] = Field(
+        default_factory=list,
+        description="ESA parts covered by this question, e.g. ['Part XV', 'Part XVI']",
+    )
 
     @model_validator(mode="after")
     def confidence_matches_state(self) -> "ComplianceResult":
         if self.compliance_state == ComplianceState.FULLY_COMPLIANT and self.confidence < 0.5:
-            raise ValueError(
-                "Fully Compliant state requires confidence >= 0.5"
-            )
+            raise ValueError("Fully Compliant state requires confidence >= 0.5")
         return self
 
     @property
@@ -120,6 +140,14 @@ class ComplianceResult(BaseModel):
         found = sum(1 for sc in self.sub_criteria_results if sc.found)
         return found / len(self.sub_criteria_results)
 
+    @property
+    def contract_quotes(self) -> List[RelevantQuote]:
+        return [q for q in self.relevant_quotes if q.source == "contract"]
+
+    @property
+    def act_quotes(self) -> List[RelevantQuote]:
+        return [q for q in self.relevant_quotes if q.source == "act"]
+
 
 # ─────────────────────────────────────────────
 # Full analysis response
@@ -132,15 +160,15 @@ class ContractAnalysisResponse(BaseModel):
     filename: str
     results: List[ComplianceResult] = Field(
         ...,
-        description="Exactly 5 compliance results, one per question",
+        description="Compliance results — one per applicable ESA question",
     )
     processing_metadata: ProcessingMetadata
 
     @field_validator("results")
     @classmethod
-    def must_have_five_results(cls, v: List[ComplianceResult]) -> List[ComplianceResult]:
-        if len(v) != 5:
-            raise ValueError(f"Expected exactly 5 compliance results, got {len(v)}")
+    def must_have_results(cls, v: List[ComplianceResult]) -> List[ComplianceResult]:
+        if len(v) == 0:
+            raise ValueError("Analysis must produce at least one compliance result")
         return v
 
     @property
@@ -161,16 +189,17 @@ class ContractAnalysisResponse(BaseModel):
 # ─────────────────────────────────────────────
 
 class JobStatus(str, Enum):
-    PENDING     = "pending"
-    PARSING_PDF = "parsing_pdf"
-    CHUNKING    = "chunking"
-    EMBEDDING   = "embedding"
-    INDEXING    = "indexing"
-    RETRIEVING  = "retrieving"
-    ANALYZING   = "analyzing"
-    EVALUATING  = "evaluating"
-    COMPLETED   = "completed"
-    FAILED      = "failed"
+    PENDING        = "pending"
+    PARSING_PDF    = "parsing_pdf"
+    CHUNKING       = "chunking"
+    EMBEDDING      = "embedding"
+    INDEXING       = "indexing"
+    CLASSIFYING    = "classifying"
+    RETRIEVING     = "retrieving"
+    ANALYZING      = "analyzing"
+    EVALUATING     = "evaluating"
+    COMPLETED      = "completed"
+    FAILED         = "failed"
 
 
 class AnalysisJob(BaseModel):
