@@ -39,6 +39,10 @@ if [ ! -f ".env" ]; then
     echo ""
 fi
 
+# ── Playwright browser (for Law Library PDF download feature) ─────────────────
+echo "==> Installing Playwright Chromium browser..."
+python -m playwright install chromium --quiet || echo "  WARNING: Playwright Chromium install failed. Law download feature will not work."
+
 # ── System dependencies (macOS) ───────────────────────────────────────────────
 if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "==> Checking system dependencies (macOS)..."
