@@ -40,29 +40,61 @@ You will be given:
 
 Your task:
 - Evaluate EACH sub-criterion by comparing the CONTRACT text against the ESA REQUIREMENT.
-- Determine the overall compliance state.
+- Determine the overall compliance state using the FOUR states below.
 - Extract VERBATIM quotes from BOTH sources:
   * Contract quotes: exact text from the employment contract (source: "contract")
   * Act quotes: the exact ESA statutory language that defines the requirement (source: "act")
-- Identify any GAPS — where the contract is silent, below the ESA minimum, or attempts to waive rights.
+- Identify any GAPS only where the contract language creates actual risk — not simply because it is silent.
 - Assign a calibrated confidence score (0.0–1.0).
 
-Compliance state rules:
-- "Fully Compliant": ALL sub-criteria clearly met; contract language equals or exceeds ESA minimum.
-- "Partially Compliant": SOME sub-criteria met, OR contract is SILENT (ESA minimum applies by law but not stated), OR language is ambiguous.
-- "Non-Compliant": Contract EXPLICITLY gives less than ESA minimum, includes a void waiver of ESA rights, or uses 'for cause' standards below ESA threshold.
+━━━ COMPLIANCE STATE RULES (read carefully) ━━━
+
+"Fully Compliant"
+  The contract EXPLICITLY addresses this ESA requirement with language that equals or
+  exceeds the ESA minimum. The employee's entitlement is clearly stated in the contract.
+  Example: contract says "Employee is entitled to 3 weeks vacation after 1 year" — ESA requires 2 weeks.
+
+"ESA Default Applies"
+  The contract is SILENT on this topic, which is entirely normal and acceptable.
+  The ESA minimum applies automatically by operation of law (ESA s.5 prohibits contracting out).
+  This is NOT a compliance problem. Use this state whenever the contract simply doesn't address
+  the topic — the employer is still legally bound by the ESA floor.
+  Example: contract says nothing about sick leave → ESA s.50.0.1 (3 days) applies automatically.
+
+"Partially Compliant"
+  The contract DOES address this requirement, but the language is incomplete, ambiguous,
+  or could reasonably be interpreted in a way that disadvantages the employee vs. ESA minimum.
+  There is a genuine risk the clause could be enforced below the ESA standard.
+  Example: contract says "reasonable notice" without defining it, in a jurisdiction where
+  reasonable notice could be argued below ESA minimums.
+
+"Non-Compliant"
+  The contract EXPLICITLY provides less than the ESA minimum, or contains language that
+  purports to waive or limit an ESA right (which is void under s.5, but is still a red flag).
+  Example: contract says "2 weeks notice regardless of length of service" — ESA requires more
+  after 8 years.
+
+━━━ DECISION GUIDE ━━━
+Ask yourself:
+1. Does the contract SAY anything about this topic?
+   → NO → "ESA Default Applies" (stop here)
+   → YES → continue
+2. Does what it says clearly meet or exceed the ESA minimum?
+   → YES → "Fully Compliant"
+   → NOT SURE / AMBIGUOUS → "Partially Compliant"
+   → EXPLICITLY BELOW MINIMUM → "Non-Compliant"
 
 CRITICAL ANTI-HALLUCINATION RULES:
 - Quote ONLY text that actually appears in the provided excerpts.
 - Do NOT paraphrase or invent contract or act language.
-- If the contract is silent on a point, state that explicitly — do not fabricate a quote.
-- A silent contract is NOT automatically non-compliant; the ESA minimum applies by law.
+- If the contract is silent, say so and use "ESA Default Applies" — do not fabricate quotes.
+- Silence is NOT non-compliance. Silence means the ESA governs by law.
 
 Confidence calibration:
-- 0.90–1.00: Explicit, unambiguous language in both contract and act confirming compliance.
-- 0.70–0.89: Clear language but minor gaps or ambiguity.
-- 0.50–0.69: Contract silent on point (ESA default applies) or significant ambiguity.
-- Below 0.50: Contract appears below ESA minimum or evidence very weak.
+- 0.90–1.00: Explicit, unambiguous language makes the determination obvious.
+- 0.70–0.89: Clear determination but some interpretive judgement required.
+- 0.50–0.69: Moderate ambiguity — reasonable lawyers might disagree.
+- Below 0.50: Very limited evidence or highly ambiguous contract language.
 
 You must call the submit_compliance_result tool with your analysis. Do not return plain text.
 """
@@ -75,8 +107,13 @@ _COMPLIANCE_TOOL = {
         "properties": {
             "compliance_state": {
                 "type": "string",
-                "enum": ["Fully Compliant", "Partially Compliant", "Non-Compliant"],
-                "description": "Overall ESA compliance state for this requirement.",
+                "enum": ["Fully Compliant", "ESA Default Applies", "Partially Compliant", "Non-Compliant"],
+                "description": (
+                    "Overall ESA compliance state. "
+                    "Use 'ESA Default Applies' when the contract is silent (ESA governs by law — not a problem). "
+                    "Use 'Partially Compliant' only when the contract addresses the topic but ambiguously or incompletely. "
+                    "Use 'Non-Compliant' only when the contract explicitly falls below the ESA minimum."
+                ),
             },
             "confidence": {
                 "type": "number",
@@ -353,11 +390,11 @@ def _parse_and_validate(
                     esa_section=sc.get("esa_section", ""),
                 ))
 
-        raw_state = data.get("compliance_state", "Partially Compliant")
+        raw_state = data.get("compliance_state", "ESA Default Applies")
         try:
             state = ComplianceState(raw_state)
         except ValueError:
-            state = ComplianceState.PARTIALLY_COMPLIANT
+            state = ComplianceState.ESA_DEFAULT
 
         raw_confidence = data.get("confidence", 0.5)
         try:

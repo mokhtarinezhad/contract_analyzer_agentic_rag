@@ -182,6 +182,7 @@ with st.sidebar:
 
 STATE_COLORS = {
     "Fully Compliant": "#2ecc71",
+    "ESA Default Applies": "#3b82f6",
     "Partially Compliant": "#f39c12",
     "Non-Compliant": "#e74c3c",
     "Unable to Determine": "#95a5a6",
@@ -189,6 +190,7 @@ STATE_COLORS = {
 
 STATE_EMOJI = {
     "Fully Compliant": "✅",
+    "ESA Default Applies": "ℹ️",
     "Partially Compliant": "⚠️",
     "Non-Compliant": "❌",
     "Unable to Determine": "❓",
@@ -413,19 +415,21 @@ def _render_results(result_data: dict, trace_id: str):
     meta = result_data.get("processing_metadata", {})
 
     # Summary cards
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     fully = sum(1 for r in results if r["compliance_state"] == "Fully Compliant")
+    esa_default = sum(1 for r in results if r["compliance_state"] == "ESA Default Applies")
     partial = sum(1 for r in results if r["compliance_state"] == "Partially Compliant")
     non = sum(1 for r in results if r["compliance_state"] == "Non-Compliant")
     avg_conf = sum(r["confidence"] for r in results) / max(len(results), 1)
     q_analyzed = meta.get("questions_analyzed", len(results))
     q_skipped = meta.get("questions_skipped", 0)
 
-    c1.metric("Fully Compliant", fully)
-    c2.metric("Partially Compliant", partial)
-    c3.metric("Non-Compliant", non)
-    c4.metric("Avg Confidence", f"{avg_conf:.0%}")
-    c5.metric("Questions Analyzed", q_analyzed, help=f"{q_skipped} ESA questions skipped (not applicable to this contract)")
+    c1.metric("✅ Fully Compliant", fully)
+    c2.metric("ℹ️ ESA Default", esa_default, help="Contract is silent; ESA minimum applies by law — not a problem")
+    c3.metric("⚠️ Partially Compliant", partial)
+    c4.metric("❌ Non-Compliant", non)
+    c5.metric("Avg Confidence", f"{avg_conf:.0%}")
+    c6.metric("Questions Analyzed", q_analyzed, help=f"{q_skipped} ESA questions skipped (not applicable to this contract)")
 
     st.divider()
 
@@ -441,7 +445,7 @@ def _render_results(result_data: dict, trace_id: str):
 
         with st.expander(
             f"{emoji} [{qid}]{parts_str}: {title} — {state} ({conf:.0%})",
-            expanded=(state != "Fully Compliant"),
+            expanded=(state not in ("Fully Compliant", "ESA Default Applies")),
         ):
             col_a, col_b = st.columns([1, 2])
 
@@ -691,6 +695,7 @@ def page_dashboard():
                 color="compliance_state",
                 color_discrete_map={
                     "Fully Compliant": "#2ecc71",
+                    "ESA Default Applies": "#3b82f6",
                     "Partially Compliant": "#f39c12",
                     "Non-Compliant": "#e74c3c",
                     "Unable to Determine": "#95a5a6",
@@ -882,6 +887,7 @@ _VERDICT_COLOR = {
 }
 _STATE_COLOR = {
     "Fully Compliant":      "#4ade80",
+    "ESA Default Applies":  "#60a5fa",
     "Partially Compliant":  "#fbbf24",
     "Non-Compliant":        "#f87171",
     "Unable to Determine":  "#9ca3af",

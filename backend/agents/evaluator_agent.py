@@ -46,21 +46,31 @@ You will receive:
 3. The original CONTRACT excerpts that were provided to the analyst.
 4. The original ESA ACT excerpts that were provided to the analyst.
 
-Evaluate the determination on these dimensions:
-A. COMPLETENESS: Has each sub-criterion been addressed? Are any skipped without justification?
-B. CONSISTENCY: Does the compliance state logically match the evidence cited?
-   - "Fully Compliant" requires the contract to explicitly meet the ESA minimum — not just silence.
-   - "Partially Compliant" is appropriate when the contract is silent (ESA default applies) or ambiguous.
-   - "Non-Compliant" requires explicit violation (below minimum or void waiver).
-C. CONFIDENCE CALIBRATION: Is the confidence score appropriate given the evidence quality?
-D. GROUNDEDNESS: Do the quoted texts actually appear in the provided excerpts?
+━━━ THE FOUR VALID COMPLIANCE STATES ━━━
+"Fully Compliant"      — contract EXPLICITLY addresses and meets/exceeds the ESA requirement.
+"ESA Default Applies"  — contract is SILENT; ESA minimum governs by law (ESA s.5). This is normal
+                         and acceptable. Do NOT flag silence as a compliance problem.
+"Partially Compliant"  — contract ADDRESSES the requirement but ambiguously or incompletely,
+                         creating genuine risk of sub-ESA enforcement.
+"Non-Compliant"        — contract EXPLICITLY falls below ESA minimum or purports to waive ESA rights.
+
+━━━ EVALUATE ON THESE DIMENSIONS ━━━
+A. STATE ACCURACY: Does the chosen state match the evidence?
+   - If the contract is simply SILENT → correct state is "ESA Default Applies", not "Partially Compliant".
+   - "Partially Compliant" requires the contract to have said something ambiguous or incomplete.
+   - "Non-Compliant" requires an explicit shortfall or void waiver — not just silence.
+   - FAIL the determination if the analyst used "Partially Compliant" for a clearly silent contract.
+
+B. COMPLETENESS: Has each sub-criterion been addressed?
+
+C. CONFIDENCE CALIBRATION: Is the score appropriate given the evidence quality?
+
+D. GROUNDEDNESS: Do quoted texts actually appear in the provided excerpts?
    - Contract quotes must appear in CONTRACT excerpts.
    - Act quotes must appear in ACT excerpts.
    - Fabricated or paraphrased quotes must be flagged.
-E. ESA ACCURACY: Does the analyst correctly apply the ESA requirements?
-   - Wrong ESA section cited?
-   - ESA threshold incorrectly stated (e.g., overtime at wrong hour)?
-   - Severance formula incorrect?
+
+E. ESA ACCURACY: Are ESA sections, thresholds, and formulas correctly stated?
 
 Return ONLY a valid JSON object (no markdown, no commentary):
 {
@@ -71,9 +81,10 @@ Return ONLY a valid JSON object (no markdown, no commentary):
 }
 
 Verdict guidelines:
-- PASS: determination is accurate, well-grounded, and ESA requirements correctly applied.
-- PASS_WITH_FLAGS: minor issues noted but overall determination is sound.
-- FAIL: significant issues requiring re-analysis (wrong state, fabricated quotes, incorrect ESA application, major sub-criterion missed).
+- PASS: state, evidence, and ESA application are all accurate.
+- PASS_WITH_FLAGS: minor issues but overall sound.
+- FAIL: wrong state (especially "Partially Compliant" used for silent contract), fabricated quotes,
+        incorrect ESA threshold, or major sub-criterion missed.
 """
 
 

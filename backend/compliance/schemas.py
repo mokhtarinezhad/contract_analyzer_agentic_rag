@@ -17,9 +17,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # ─────────────────────────────────────────────
 
 class ComplianceState(str, Enum):
-    FULLY_COMPLIANT = "Fully Compliant"
+    FULLY_COMPLIANT    = "Fully Compliant"
+    ESA_DEFAULT        = "ESA Default Applies"
     PARTIALLY_COMPLIANT = "Partially Compliant"
-    NON_COMPLIANT = "Non-Compliant"
+    NON_COMPLIANT      = "Non-Compliant"
     UNABLE_TO_DETERMINE = "Unable to Determine"
 
 
@@ -127,6 +128,8 @@ class ComplianceResult(BaseModel):
     def confidence_matches_state(self) -> "ComplianceResult":
         if self.compliance_state == ComplianceState.FULLY_COMPLIANT and self.confidence < 0.5:
             raise ValueError("Fully Compliant state requires confidence >= 0.5")
+        if self.compliance_state == ComplianceState.NON_COMPLIANT and self.confidence < 0.3:
+            raise ValueError("Non-Compliant state requires confidence >= 0.3")
         return self
 
     @property
