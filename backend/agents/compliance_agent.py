@@ -329,27 +329,29 @@ def _parse_and_validate(
         data = raw_args
 
     try:
-        quotes = [
-            RelevantQuote(
-                text=q["text"],
-                section_reference=q.get("section_reference", "Unknown"),
-                page_number=q.get("page_number"),
-                source=q.get("source", "contract"),
-            )
-            for q in data.get("relevant_quotes", [])
-            if q.get("text", "").strip()
-        ]
+        quotes = []
+        for q in data.get("relevant_quotes", []):
+            if isinstance(q, str):
+                if q.strip():
+                    quotes.append(RelevantQuote(text=q, section_reference="Unknown", source="contract"))
+            elif isinstance(q, dict) and q.get("text", "").strip():
+                quotes.append(RelevantQuote(
+                    text=q["text"],
+                    section_reference=q.get("section_reference", "Unknown"),
+                    page_number=q.get("page_number"),
+                    source=q.get("source", "contract"),
+                ))
 
-        sc_results = [
-            SubCriterionResult(
-                criterion_id=sc["criterion_id"],
-                description=sc["description"],
-                found=bool(sc["found"]),
-                evidence_summary=sc["evidence_summary"],
-                esa_section=sc.get("esa_section", ""),
-            )
-            for sc in data.get("sub_criteria_results", [])
-        ]
+        sc_results = []
+        for sc in data.get("sub_criteria_results", []):
+            if isinstance(sc, dict):
+                sc_results.append(SubCriterionResult(
+                    criterion_id=sc.get("criterion_id", "unknown"),
+                    description=sc.get("description", ""),
+                    found=bool(sc.get("found", False)),
+                    evidence_summary=sc.get("evidence_summary", ""),
+                    esa_section=sc.get("esa_section", ""),
+                ))
 
         state = ComplianceState(data["compliance_state"])
         confidence = max(0.0, min(1.0, float(data["confidence"])))
