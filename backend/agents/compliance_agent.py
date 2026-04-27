@@ -353,8 +353,17 @@ def _parse_and_validate(
                     esa_section=sc.get("esa_section", ""),
                 ))
 
-        state = ComplianceState(data["compliance_state"])
-        confidence = max(0.0, min(1.0, float(data["confidence"])))
+        raw_state = data.get("compliance_state", "Partially Compliant")
+        try:
+            state = ComplianceState(raw_state)
+        except ValueError:
+            state = ComplianceState.PARTIALLY_COMPLIANT
+
+        raw_confidence = data.get("confidence", 0.5)
+        try:
+            confidence = max(0.0, min(1.0, float(raw_confidence)))
+        except (TypeError, ValueError):
+            confidence = 0.5
 
         return ComplianceResult(
             question_id=question.id,
@@ -363,7 +372,7 @@ def _parse_and_validate(
             compliance_state=state,
             confidence=confidence,
             relevant_quotes=quotes,
-            rationale=data["rationale"],
+            rationale=data.get("rationale", "No rationale provided by model."),
             sub_criteria_results=sc_results,
             retry_count=0,
             act_sections_cited=data.get("act_sections_cited", []),
