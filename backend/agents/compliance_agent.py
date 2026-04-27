@@ -175,7 +175,7 @@ def run_compliance_agent(
     """
     t0 = time.perf_counter()
     active_model = model or settings.llm_model
-    llm = get_llm(active_model, max_tokens=2048)
+    llm = get_llm(active_model, max_tokens=1200)
     llm_with_tools = llm.bind_tools(
         [_COMPLIANCE_TOOL],
         tool_choice="submit_compliance_result",

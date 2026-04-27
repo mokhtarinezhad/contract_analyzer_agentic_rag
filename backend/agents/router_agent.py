@@ -71,7 +71,7 @@ def run_router_agent(
     """
     t0 = time.perf_counter()
     active_model = model or settings.llm_model
-    llm = get_llm(active_model, max_tokens=1024)
+    llm = get_llm(active_model, max_tokens=700)
 
     sub_criteria_text = "\n".join(
         f"  - [{sc.id}] {sc.description} (ESA: {sc.esa_section}, keywords: {', '.join(sc.keywords[:4])})"

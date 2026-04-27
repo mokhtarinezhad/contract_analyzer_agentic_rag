@@ -56,9 +56,10 @@ class Settings(BaseSettings):
     max_concurrent_questions: int = 3
     # Max questions analysed in parallel. Reduce to 1–2 on low-tier API plans
     # (8k output TPM). Each question calls router + compliance + evaluator.
-    llm_retry_max_attempts: int = 4
-    llm_retry_base_delay_s: float = 15.0
+    llm_retry_max_attempts: int = 3
+    llm_retry_base_delay_s: float = 60.0
     # On 429, waits base_delay * 2^attempt seconds before retrying.
+    # 60s base ensures the TPM 1-minute window resets before each retry.
 
     # ── ESA Reference Knowledge Base ─────────────────────────────────────
     esa_act_collection_name: str = "eao-act-reference"
