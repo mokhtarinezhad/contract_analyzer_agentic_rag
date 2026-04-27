@@ -292,6 +292,11 @@ def page_analyze():
 
         st.session_state["job_progress"] = {"pct": pct, "label": label, "steps": steps}
 
+        # Show partial results as they arrive
+        partial = poll.get("result")
+        if partial and partial.get("results"):
+            st.session_state["last_result"] = partial
+
         if status == "completed":
             st.session_state["last_result"]  = poll.get("result")
             st.session_state["job_running"]  = False
@@ -304,7 +309,7 @@ def page_analyze():
             st.session_state["job_progress"] = {}
             return
         else:
-            time.sleep(1)
+            time.sleep(2)
             st.rerun()
             return
 
@@ -389,6 +394,19 @@ def page_analyze():
 
 def _render_results(result_data: dict, trace_id: str):
     st.divider()
+
+    is_partial = result_data.get("partial", False)
+    done = result_data.get("completed_count", 0)
+    total = result_data.get("total_count", 0)
+
+    if is_partial:
+        st.markdown(
+            f"<div style='background:#1e3a1e;border-radius:8px;padding:10px 14px;margin-bottom:10px'>"
+            f"<span style='color:#4ade80;font-size:0.9rem'>⏳ Analysis in progress — "
+            f"{done} of {total} questions complete. Results update automatically.</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
     st.subheader("ESA Compliance Analysis Results")
 
     results = result_data.get("results", [])

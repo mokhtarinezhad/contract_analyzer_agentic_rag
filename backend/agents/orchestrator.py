@@ -294,6 +294,7 @@ async def analyse_contract(
     contract_id: Optional[str] = None,
     trace_id: Optional[str] = None,
     job_update_callback=None,
+    on_question_complete=None,
     model: Optional[str] = None,
     law_collection_name: Optional[str] = None,
 ) -> ContractAnalysisResponse:
@@ -404,6 +405,7 @@ async def analyse_contract(
 
     active_law_collection = law_collection_name or settings.esa_act_collection_name
     semaphore = asyncio.Semaphore(settings.max_concurrent_questions)
+    total_questions = len(applicable_questions)
 
     async def _run_with_semaphore(q):
         async with semaphore:
@@ -413,17 +415,16 @@ async def analyse_contract(
                 act_collection_name=active_law_collection,
             )
 
-    question_tasks = [_run_with_semaphore(q) for q in applicable_questions]
-    question_states = await asyncio.gather(*question_tasks, return_exceptions=False)
-    timings["llm_ms"] = (time.perf_counter() - t) * 1000
-
-    await _update("evaluating", 88)
-
-    # ── Step 7: Collect and validate results ──────────────────────────────
+    # ── Step 7: Collect results as each question finishes ─────────────────
     results: List[ComplianceResult] = []
     eval_ms_total = 0.0
+    done_count = 0
 
-    for state in question_states:
+    futs = [asyncio.ensure_future(_run_with_semaphore(q)) for q in applicable_questions]
+    for fut in asyncio.as_completed(futs):
+        state = await fut
+        done_count += 1
+
         cr = state.get("compliance_result")
         if cr is None:
             q = state["question"]
@@ -443,6 +444,12 @@ async def analyse_contract(
         total_output_tokens += state.get("total_output_tokens", 0)
         eval_ms_total += state.get("evaluator_latency_ms", 0)
 
+        # Fire partial-result callback so the UI can show incremental progress
+        if on_question_complete:
+            pct = 48 + int((done_count / total_questions) * 40)
+            await on_question_complete(list(results), done_count, total_questions, pct)
+
+    timings["llm_ms"] = (time.perf_counter() - t) * 1000
     timings["evaluation_ms"] = eval_ms_total
     total_duration_ms = (time.perf_counter() - pipeline_t0) * 1000
 

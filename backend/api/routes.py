@@ -155,6 +155,22 @@ async def _run_analysis_background(
             current_step=status,
         )
 
+    async def _on_question_complete(partial_results, done: int, total: int, pct: int):
+        partial_payload = {
+            "results": [r.model_dump(mode="json") for r in partial_results],
+            "partial": True,
+            "completed_count": done,
+            "total_count": total,
+            "processing_metadata": {},
+        }
+        update_job(
+            job_id=job_id,
+            status=JobStatus.ANALYZING.value,
+            progress_pct=pct,
+            current_step=f"analyzed_{done}_of_{total}",
+            result_json=json.dumps(partial_payload, default=str),
+        )
+
     try:
         await _update_job(JobStatus.PARSING_PDF.value, 5)
 
@@ -164,6 +180,7 @@ async def _run_analysis_background(
             contract_id=contract_id,
             trace_id=trace_id,
             job_update_callback=_update_job,
+            on_question_complete=_on_question_complete,
             model=model,
             law_collection_name=law_collection_name,
         )
@@ -219,7 +236,8 @@ async def get_results(job_id: str):
     if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
         response["error"] = job["error_message"]
 
-    if job["status"] == JobStatus.COMPLETED.value and job.get("result_json"):
+    # Return result for completed jobs, and partial results for in-progress jobs
+    if job.get("result_json"):
         response["result"] = json.loads(job["result_json"])
 
     return JSONResponse(content=response)
