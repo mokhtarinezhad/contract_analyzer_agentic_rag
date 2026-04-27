@@ -104,8 +104,9 @@ def run_router_agent(
     llm_duration = (time.perf_counter() - llm_t0) * 1000
 
     raw_text = response.content
-    input_tokens = response.usage_metadata.get("input_tokens", 0)
-    output_tokens = response.usage_metadata.get("output_tokens", 0)
+    _usage = response.usage_metadata or {}
+    input_tokens = _usage.get("input_tokens", 0)
+    output_tokens = _usage.get("output_tokens", 0)
 
     logger.info(
         "router_llm_call_complete",

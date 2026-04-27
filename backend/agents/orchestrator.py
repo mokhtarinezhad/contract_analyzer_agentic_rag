@@ -419,11 +419,13 @@ async def analyse_contract(
     results: List[ComplianceResult] = []
     eval_ms_total = 0.0
     done_count = 0
+    total_retry_count = 0
 
     futs = [asyncio.ensure_future(_run_with_semaphore(q)) for q in applicable_questions]
     for fut in asyncio.as_completed(futs):
         state = await fut
         done_count += 1
+        total_retry_count += state.get("retry_count", 0)
 
         cr = state.get("compliance_result")
         if cr is None:
@@ -490,7 +492,7 @@ async def analyse_contract(
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
             estimated_cost_usd=estimated_cost,
-            retry_count=sum(s.get("retry_count", 0) for s in question_states),
+            retry_count=total_retry_count,
             model_used=active_model,
             chunks_retrieved_per_question=len(chunks),
             questions_analyzed=len(results),
@@ -512,7 +514,7 @@ async def analyse_contract(
         total_output_tokens=total_output_tokens,
         estimated_cost_usd=estimated_cost,
         model_used=active_model,
-        retry_count=sum(s.get("retry_count", 0) for s in question_states),
+        retry_count=total_retry_count,
         avg_confidence=avg_confidence,
         full_result_json=_json.dumps(_response_obj.model_dump(mode="json")),
     )

@@ -119,8 +119,9 @@ def run_classifier_agent(
         HumanMessage(content=user_message),
     ])
 
-    input_tokens = response.usage_metadata.get("input_tokens", 0)
-    output_tokens = response.usage_metadata.get("output_tokens", 0)
+    _usage = response.usage_metadata or {}
+    input_tokens = _usage.get("input_tokens", 0)
+    output_tokens = _usage.get("output_tokens", 0)
 
     triggered_ids = _parse_classifier_response(
         response.content,

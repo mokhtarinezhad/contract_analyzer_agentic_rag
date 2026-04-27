@@ -311,6 +311,10 @@ def page_analyze():
             st.session_state["job_progress"] = {}
             return
         else:
+            # Render whatever partial results we have so far, then rerun
+            current = st.session_state.get("last_result")
+            if current and current.get("results"):
+                _render_results(current, st.session_state.get("last_trace_id", ""))
             time.sleep(2)
             st.rerun()
             return

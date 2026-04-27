@@ -342,8 +342,9 @@ def _run_llm_critic(
     ])
 
     raw_text = response.content
-    input_tokens = response.usage_metadata.get("input_tokens", 0)
-    output_tokens = response.usage_metadata.get("output_tokens", 0)
+    _usage = response.usage_metadata or {}
+    input_tokens = _usage.get("input_tokens", 0)
+    output_tokens = _usage.get("output_tokens", 0)
 
     assessment = _parse_evaluator_response(raw_text, trace_id, compliance_result.question_id)
 
