@@ -8,6 +8,9 @@ so swapping providers requires only a different model name string.
 
 from __future__ import annotations
 
+import time
+from typing import Any, List
+
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 
@@ -50,3 +53,24 @@ def get_llm(model_name: str | None = None, max_tokens: int = 1024):
         max_tokens=max_tokens,
         api_key=settings.anthropic_api_key,
     )
+
+
+def invoke_with_retry(llm: Any, messages: List, **kwargs) -> Any:
+    """
+    Call llm.invoke(messages) with exponential backoff on 429 rate-limit errors.
+    Uses settings.llm_retry_max_attempts and settings.llm_retry_base_delay_s.
+    """
+    max_attempts = settings.llm_retry_max_attempts
+    base_delay = settings.llm_retry_base_delay_s
+
+    for attempt in range(max_attempts):
+        try:
+            return llm.invoke(messages, **kwargs)
+        except Exception as exc:
+            err = str(exc).lower()
+            is_rate_limit = "rate_limit" in err or "429" in err or "rate limit" in err
+            if is_rate_limit and attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                time.sleep(delay)
+                continue
+            raise

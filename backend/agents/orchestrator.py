@@ -403,11 +403,17 @@ async def analyse_contract(
     t = time.perf_counter()
 
     active_law_collection = law_collection_name or settings.esa_act_collection_name
-    question_tasks = [
-        _run_single_question(q, contract_id, trace_id, model=active_model,
-                             act_collection_name=active_law_collection)
-        for q in applicable_questions
-    ]
+    semaphore = asyncio.Semaphore(settings.max_concurrent_questions)
+
+    async def _run_with_semaphore(q):
+        async with semaphore:
+            return await _run_single_question(
+                q, contract_id, trace_id,
+                model=active_model,
+                act_collection_name=active_law_collection,
+            )
+
+    question_tasks = [_run_with_semaphore(q) for q in applicable_questions]
     question_states = await asyncio.gather(*question_tasks, return_exceptions=False)
     timings["llm_ms"] = (time.perf_counter() - t) * 1000
 

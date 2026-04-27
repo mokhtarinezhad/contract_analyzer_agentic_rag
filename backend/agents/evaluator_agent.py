@@ -34,7 +34,7 @@ from backend.compliance.schemas import (
     EvaluatorVerdict,
 )
 from backend.config import settings
-from backend.llm_factory import get_llm
+from backend.llm_factory import get_llm, invoke_with_retry
 from backend.observability.logger import get_logger
 
 logger = get_logger(__name__)
@@ -325,7 +325,7 @@ def _run_llm_critic(
         model=settings.llm_model,
     )
 
-    response = llm.invoke([
+    response = invoke_with_retry(llm, [
         SystemMessage(content=_EVALUATOR_SYSTEM_PROMPT),
         HumanMessage(content=user_content),
     ])

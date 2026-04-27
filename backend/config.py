@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     max_retry_count: int = 2
     hallucination_match_threshold: float = 0.80
 
+    # ── Rate limiting ─────────────────────────────────────────────────────
+    max_concurrent_questions: int = 3
+    # Max questions analysed in parallel. Reduce to 1–2 on low-tier API plans
+    # (8k output TPM). Each question calls router + compliance + evaluator.
+    llm_retry_max_attempts: int = 4
+    llm_retry_base_delay_s: float = 15.0
+    # On 429, waits base_delay * 2^attempt seconds before retrying.
+
     # ── ESA Reference Knowledge Base ─────────────────────────────────────
     esa_act_collection_name: str = "eao-act-reference"
 

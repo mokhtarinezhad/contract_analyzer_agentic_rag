@@ -26,7 +26,7 @@ from backend.compliance.schemas import (
     SubCriterionResult,
 )
 from backend.config import settings
-from backend.llm_factory import get_llm
+from backend.llm_factory import get_llm, invoke_with_retry
 from backend.observability.logger import get_logger
 
 logger = get_logger(__name__)
@@ -225,7 +225,7 @@ def run_compliance_agent(
         model=active_model,
     )
 
-    response = llm_with_tools.invoke(messages)
+    response = invoke_with_retry(llm_with_tools, messages)
 
     duration_ms = (time.perf_counter() - t0) * 1000
     input_tokens = response.usage_metadata.get("input_tokens", 0)

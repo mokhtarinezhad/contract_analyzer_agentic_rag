@@ -21,7 +21,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.compliance.eao_questions import ESAComplianceQuestion
 from backend.config import settings
-from backend.llm_factory import get_llm
+from backend.llm_factory import get_llm, invoke_with_retry
 from backend.observability.logger import get_logger
 from backend.rag.retriever import retrieve_for_question, retrieve_from_act
 
@@ -97,7 +97,7 @@ def run_router_agent(
     )
 
     llm_t0 = time.perf_counter()
-    response = llm.invoke([
+    response = invoke_with_retry(llm, [
         SystemMessage(content=_ROUTER_SYSTEM_PROMPT),
         HumanMessage(content=user_message),
     ])

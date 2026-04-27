@@ -22,7 +22,7 @@ from backend.compliance.eao_questions import (
     get_conditional_questions,
 )
 from backend.config import settings
-from backend.llm_factory import get_llm
+from backend.llm_factory import get_llm, invoke_with_retry
 from backend.observability.logger import get_logger
 from backend.rag.vector_store import get_all_chunks
 
@@ -114,7 +114,7 @@ def run_classifier_agent(
         model=active_model,
     )
 
-    response = llm.invoke([
+    response = invoke_with_retry(llm, [
         SystemMessage(content=_CLASSIFIER_SYSTEM_PROMPT),
         HumanMessage(content=user_message),
     ])
